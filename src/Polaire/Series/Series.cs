@@ -284,9 +284,20 @@ public sealed class Series : IEnumerable<AnyValue>
         // Create sliced view
         return _data.DataType switch
         {
+            DataType.Int8Type => new Series(_name, ((ChunkedArray<sbyte>)_data).Slice(offset, length)),
+            DataType.Int16Type => new Series(_name, ((ChunkedArray<short>)_data).Slice(offset, length)),
             DataType.Int32Type => new Series(_name, ((ChunkedArray<int>)_data).Slice(offset, length)),
             DataType.Int64Type => new Series(_name, ((ChunkedArray<long>)_data).Slice(offset, length)),
+            DataType.UInt8Type => new Series(_name, ((ChunkedArray<byte>)_data).Slice(offset, length)),
+            DataType.UInt16Type => new Series(_name, ((ChunkedArray<ushort>)_data).Slice(offset, length)),
+            DataType.UInt32Type => new Series(_name, ((ChunkedArray<uint>)_data).Slice(offset, length)),
+            DataType.UInt64Type => new Series(_name, ((ChunkedArray<ulong>)_data).Slice(offset, length)),
+            DataType.Float32Type => new Series(_name, ((ChunkedArray<float>)_data).Slice(offset, length)),
             DataType.Float64Type => new Series(_name, ((ChunkedArray<double>)_data).Slice(offset, length)),
+            DataType.BooleanType => new Series(_name, ((ChunkedArray<bool>)_data).Slice(offset, length)),
+            DataType.StringType => new Series(_name, ((StringChunkedArray)_data).Slice(offset, length)),
+            DataType.DateType => new Series(_name, ((ChunkedArray<int>)_data).Slice(offset, length)),
+            DataType.DateTimeType => new Series(_name, ((ChunkedArray<long>)_data).Slice(offset, length)),
             _ => throw new NotSupportedException($"Slice not supported for {_data.DataType}")
         };
     }
@@ -563,6 +574,39 @@ internal sealed class StringChunkedArray : IChunkedArray
     }
 
     public object? GetBoxedValue(int index) => GetString(index);
+
+    public StringChunkedArray Slice(int offset, int length)
+    {
+        if (offset < 0 || length < 0 || offset + length > _length)
+            throw new ArgumentOutOfRangeException();
+
+        var resultChunks = new List<IArrowArray>();
+        int currentOffset = 0;
+        int remaining = length;
+
+        foreach (var chunk in _chunks)
+        {
+            if (currentOffset + chunk.Length <= offset)
+            {
+                currentOffset += chunk.Length;
+                continue;
+            }
+
+            int chunkStart = Math.Max(0, offset - currentOffset);
+            int chunkLength = Math.Min(remaining, chunk.Length - chunkStart);
+
+            if (chunkLength > 0)
+            {
+                resultChunks.Add(Apache.Arrow.ArrowArrayFactory.Slice(chunk, chunkStart, chunkLength));
+                remaining -= chunkLength;
+            }
+
+            currentOffset += chunk.Length;
+            if (remaining <= 0) break;
+        }
+
+        return new StringChunkedArray(resultChunks.ToArray(), _dataType);
+    }
 
     private (int chunkIndex, int localIndex) GetChunkIndex(int globalIndex)
     {
