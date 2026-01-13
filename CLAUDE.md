@@ -120,6 +120,23 @@ polaire/
 - Fixed Head and LazyChainedOperations benchmarks
 - All 163 tests passing
 
+### Session 5 (SIMD Optimization - January 2025)
+- Added SIMD optimization for Min/Max aggregations
+- Created `MinVectorized` / `MaxVectorized` helpers using `Vector.Min()` / `Vector.Max()`
+- Performance improvement: **85x faster** for Min/Max (27.7ms → 324µs on 1M rows)
+- Min/Max now faster than Sum/Mean (simpler reduction, no accumulation)
+- Added `.claude/settings.local.json` to .gitignore
+- Removed it from git tracking (was accidentally committed)
+
+**Key SIMD pattern** (see `SeriesAggregations.cs`):
+```csharp
+if (!series.HasNulls && data.ChunkCount == 1)
+{
+    var span = data.GetChunkSpan(0);
+    result = MinVectorized(span);  // Uses Vector.Min()
+}
+```
+
 ## Design Objectives (from original requirements)
 
 1. **Feature Parity** - Match Polars functionality
@@ -140,6 +157,12 @@ dotnet build -c Release
 
 # Check for compiler warnings (usually hidden)
 dotnet build -warnaserror-
+
+# Run all benchmarks (takes ~10 minutes)
+dotnet run -c Release --project benchmarks/Polaire.Benchmarks/
+
+# Run specific benchmarks with shorter duration (~2-5 min)
+dotnet run -c Release --project benchmarks/Polaire.Benchmarks/ -- --filter "*Aggregation*" --job short
 ```
 
 ## API Quick Reference
