@@ -74,7 +74,7 @@ polaire/
 - `MemoryPool.Memory<T>` property creates a copy (performance impact)
 - `VectorScalarOp` uses scalar fallback (SIMD optimization removed due to delegate comparison issue)
 - XML documentation incomplete (CS1591 warnings suppressed)
-- Std/Var aggregations not yet SIMD optimized
+- Float32 aggregations not yet SIMD optimized (only Float64, Int32, Int64)
 
 ## Dependencies
 
@@ -136,6 +136,26 @@ if (!series.HasNulls && data.ChunkCount == 1)
     result = MinVectorized(span);  // Uses Vector.Min()
 }
 ```
+
+### Session 6 (SIMD Var/Std + Polars Comparison - January 2025)
+- Added SIMD optimization for Var/Std aggregations (two-pass algorithm)
+- Created `SumSquaredDiffVectorized` helper for variance calculation
+- Performance improvement: **39x faster** for Std (37ms → 955µs on 1M rows)
+- Created `benchmarks/polars_comparison.py` for direct Polars comparison
+- **Polars Comparison Results (N=1,000,000):**
+
+| Operation | Polaire (C#) | Polars (Rust) | Gap |
+|-----------|--------------|---------------|-----|
+| Sum | 478 µs | 113 µs | 4.2x |
+| Mean | 480 µs | 127 µs | 3.8x |
+| Min | 321 µs | 112 µs | 2.9x |
+| Max | 322 µs | 111 µs | 2.9x |
+| Std | 955 µs | 648 µs | 1.5x |
+
+**Analysis:** A 1.5-4x gap between managed C# and highly-optimized Rust is reasonable:
+- Polars uses architecture-specific AVX2/AVX512 intrinsics
+- Polaire uses `System.Numerics.Vector<T>` (portable but not optimal)
+- Before SIMD: Std had a 58x gap, now just 1.5x
 
 ## Design Objectives (from original requirements)
 
@@ -204,10 +224,11 @@ var result = ScanCsv("large.csv")
 ### SIMD-Optimized Aggregations
 | Operation | 1K | 10K | 100K | 1M |
 |-----------|-----|------|------|------|
-| Sum | 511 ns | 4.8 µs | 48 µs | 482 µs |
-| Mean | 515 ns | 4.8 µs | 48 µs | 483 µs |
-| Min | 500 ns | 3.2 µs | 32 µs | 324 µs |
-| Max | 500 ns | 3.2 µs | 32 µs | 322 µs |
+| Sum | 510 ns | 4.8 µs | 48 µs | 478 µs |
+| Mean | 524 ns | 4.8 µs | 48 µs | 480 µs |
+| Min | 349 ns | 3.2 µs | 32 µs | 321 µs |
+| Max | 353 ns | 3.2 µs | 32 µs | 322 µs |
+| Std | 1.0 µs | 9.6 µs | 95 µs | 955 µs |
 | Addition | 6 µs | 56 µs | 691 µs | 6.7 ms |
 
 ### DataFrame Operations
@@ -219,14 +240,22 @@ var result = ScanCsv("large.csv")
 | GroupBySum | 375 µs | 2.5 ms | 25.4 ms |
 | Join | 318 µs | 5.4 ms | - |
 
-### Known Performance Issues
-- Std/Var: Not yet SIMD optimized (~38ms for 1M rows)
+### Polars Comparison (N=1,000,000)
+| Operation | Polaire | Polars | Gap |
+|-----------|---------|--------|-----|
+| Min/Max | 321 µs | 111 µs | 2.9x |
+| Sum/Mean | 479 µs | 120 µs | 4.0x |
+| Std | 955 µs | 648 µs | 1.5x |
+
+Run comparison: `source .venv/bin/activate && python benchmarks/polars_comparison.py`
 
 ## Next Steps / Roadmap
 
-1. **Performance Comparison with Polars** - Run equivalent benchmarks
-2. **SIMD for Std/Var** - Implement vectorized standard deviation/variance
+1. ~~**Performance Comparison with Polars**~~ ✓ Done (1.5-4x gap)
+2. ~~**SIMD for Std/Var**~~ ✓ Done (39x improvement)
 3. **SQL Interface** - Use SqlParser to execute SQL queries
 4. **Window Functions** - Rolling aggregations, rank, etc.
 5. **More String Operations** - Regex, split, extract, etc.
 6. **Streaming I/O** - Process files larger than memory
+7. **SIMD for Float32** - Currently only Float64/Int32/Int64 optimized
+8. **Architecture-specific intrinsics** - Use AVX2/AVX512 directly for better perf
