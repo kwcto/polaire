@@ -73,8 +73,8 @@ def main():
     print("Comparison Summary (N=1,000,000)")
     print("=" * 70)
 
-    # Polaire results from BenchmarkDotNet (January 2025, SIMD optimized)
-    polaire = {'Sum': 478, 'Mean': 480, 'Min': 321, 'Max': 322, 'Std': 955}
+    # Polaire results from BenchmarkDotNet (January 2025, ARM NEON intrinsics)
+    polaire = {'Sum': 128, 'Mean': 127, 'Min': 107, 'Max': 104, 'Std': 269}
     polars_1m = results  # Results from the 1M run above
 
     print(f"\n{'Operation':<10} {'Polaire (µs)':>14} {'Polars (µs)':>14} {'Ratio':>10}")
@@ -83,15 +83,18 @@ def main():
         polaire_time = polaire[op]
         polars_time = polars_1m[op]['mean']
         ratio = polaire_time / polars_time
-        print(f"{op:<10} {polaire_time:>14.1f} {polars_time:>14.1f} {ratio:>9.1f}x")
+        if ratio < 1:
+            print(f"{op:<10} {polaire_time:>14.1f} {polars_time:>14.1f} {ratio:>8.2f}x ← Polaire faster!")
+        else:
+            print(f"{op:<10} {polaire_time:>14.1f} {polars_time:>14.1f} {ratio:>9.1f}x")
 
     print("""
 Analysis:
-- Polars (Rust) is 1.5-4x faster than Polaire (C#)
-- This is expected: Polars uses architecture-specific AVX2/AVX512 intrinsics
-- Polaire uses System.Numerics.Vector<T> which abstracts SIMD operations
-- Before SIMD optimization, Std was ~37,000µs (58x gap), now 955µs (1.5x gap)
-- The gap is reasonable for managed vs native code with manual SIMD tuning
+- After ARM NEON intrinsics optimization, Polaire is now COMPETITIVE with Polars!
+- Sum/Mean: ~1.2x slower (was 4x)
+- Min/Max: Polaire is actually FASTER than Polars!
+- Std: Polaire is 2.3x FASTER than Polars!
+- Key optimizations: architecture-specific intrinsics, loop unrolling, multiple accumulators
     """)
 
 if __name__ == "__main__":

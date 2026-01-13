@@ -3,6 +3,10 @@
 
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 using Polaire.DataTypes;
 using Polaire.Core;
 
@@ -828,8 +832,75 @@ public static class SeriesAggregations
         double sum = 0;
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        ref double ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
         {
+            // ARM NEON path (128-bit = 2 doubles per vector)
+            // Use 4 accumulators for better instruction-level parallelism
+            var vSum0 = Vector128<double>.Zero;
+            var vSum1 = Vector128<double>.Zero;
+            var vSum2 = Vector128<double>.Zero;
+            var vSum3 = Vector128<double>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 2));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 6));
+
+                vSum0 = AdvSimd.Arm64.Add(vSum0, v0);
+                vSum1 = AdvSimd.Arm64.Add(vSum1, v1);
+                vSum2 = AdvSimd.Arm64.Add(vSum2, v2);
+                vSum3 = AdvSimd.Arm64.Add(vSum3, v3);
+            }
+
+            // Combine accumulators
+            vSum0 = AdvSimd.Arm64.Add(vSum0, vSum1);
+            vSum2 = AdvSimd.Arm64.Add(vSum2, vSum3);
+            vSum0 = AdvSimd.Arm64.Add(vSum0, vSum2);
+
+            // Horizontal sum (NEON has AddPairwise for this)
+            sum = AdvSimd.Arm64.AddPairwiseScalar(vSum0).ToScalar();
+        }
+        else if (Avx.IsSupported && span.Length >= 16)
+        {
+            // x64 AVX path (256-bit = 4 doubles per vector)
+            // Use 4 accumulators for better instruction-level parallelism
+            var vSum0 = Vector256<double>.Zero;
+            var vSum1 = Vector256<double>.Zero;
+            var vSum2 = Vector256<double>.Zero;
+            var vSum3 = Vector256<double>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vSum0 = Avx.Add(vSum0, v0);
+                vSum1 = Avx.Add(vSum1, v1);
+                vSum2 = Avx.Add(vSum2, v2);
+                vSum3 = Avx.Add(vSum3, v3);
+            }
+
+            // Combine accumulators
+            vSum0 = Avx.Add(vSum0, vSum1);
+            vSum2 = Avx.Add(vSum2, vSum3);
+            vSum0 = Avx.Add(vSum0, vSum2);
+
+            // Horizontal sum
+            sum = vSum0.GetElement(0) + vSum0.GetElement(1) + vSum0.GetElement(2) + vSum0.GetElement(3);
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            // Fallback to portable SIMD
             var vSum = Vector<double>.Zero;
             var vectorCount = span.Length - (span.Length % Vector<double>.Count);
 
@@ -842,6 +913,7 @@ public static class SeriesAggregations
                 sum += vSum[j];
         }
 
+        // Scalar remainder
         for (; i < span.Length; i++)
             sum += span[i];
 
@@ -858,8 +930,85 @@ public static class SeriesAggregations
         double sum = 0;
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        ref double ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
         {
+            // ARM NEON path (128-bit = 2 doubles per vector)
+            var vMean = Vector128.Create(mean);
+            var vSum0 = Vector128<double>.Zero;
+            var vSum1 = Vector128<double>.Zero;
+            var vSum2 = Vector128<double>.Zero;
+            var vSum3 = Vector128<double>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 2));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 6));
+
+                var diff0 = AdvSimd.Arm64.Subtract(v0, vMean);
+                var diff1 = AdvSimd.Arm64.Subtract(v1, vMean);
+                var diff2 = AdvSimd.Arm64.Subtract(v2, vMean);
+                var diff3 = AdvSimd.Arm64.Subtract(v3, vMean);
+
+                vSum0 = AdvSimd.Arm64.Add(vSum0, AdvSimd.Arm64.Multiply(diff0, diff0));
+                vSum1 = AdvSimd.Arm64.Add(vSum1, AdvSimd.Arm64.Multiply(diff1, diff1));
+                vSum2 = AdvSimd.Arm64.Add(vSum2, AdvSimd.Arm64.Multiply(diff2, diff2));
+                vSum3 = AdvSimd.Arm64.Add(vSum3, AdvSimd.Arm64.Multiply(diff3, diff3));
+            }
+
+            // Combine accumulators
+            vSum0 = AdvSimd.Arm64.Add(vSum0, vSum1);
+            vSum2 = AdvSimd.Arm64.Add(vSum2, vSum3);
+            vSum0 = AdvSimd.Arm64.Add(vSum0, vSum2);
+
+            // Horizontal sum
+            sum = AdvSimd.Arm64.AddPairwiseScalar(vSum0).ToScalar();
+        }
+        else if (Avx.IsSupported && span.Length >= 16)
+        {
+            // x64 AVX path (256-bit = 4 doubles per vector)
+            var vMean = Vector256.Create(mean);
+            var vSum0 = Vector256<double>.Zero;
+            var vSum1 = Vector256<double>.Zero;
+            var vSum2 = Vector256<double>.Zero;
+            var vSum3 = Vector256<double>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                var diff0 = Avx.Subtract(v0, vMean);
+                var diff1 = Avx.Subtract(v1, vMean);
+                var diff2 = Avx.Subtract(v2, vMean);
+                var diff3 = Avx.Subtract(v3, vMean);
+
+                vSum0 = Avx.Add(vSum0, Avx.Multiply(diff0, diff0));
+                vSum1 = Avx.Add(vSum1, Avx.Multiply(diff1, diff1));
+                vSum2 = Avx.Add(vSum2, Avx.Multiply(diff2, diff2));
+                vSum3 = Avx.Add(vSum3, Avx.Multiply(diff3, diff3));
+            }
+
+            // Combine accumulators
+            vSum0 = Avx.Add(vSum0, vSum1);
+            vSum2 = Avx.Add(vSum2, vSum3);
+            vSum0 = Avx.Add(vSum0, vSum2);
+
+            // Horizontal sum
+            sum = vSum0.GetElement(0) + vSum0.GetElement(1) + vSum0.GetElement(2) + vSum0.GetElement(3);
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            // Fallback to portable SIMD
             var vMean = new Vector<double>(mean);
             var vSum = Vector<double>.Zero;
             var vectorCount = span.Length - (span.Length % Vector<double>.Count);
@@ -1036,8 +1185,75 @@ public static class SeriesAggregations
         double min = double.PositiveInfinity;
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        ref double ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
         {
+            // ARM NEON path (128-bit = 2 doubles per vector)
+            // Use 4 accumulators for better instruction-level parallelism
+            var vMin0 = Vector128.Create(double.PositiveInfinity);
+            var vMin1 = Vector128.Create(double.PositiveInfinity);
+            var vMin2 = Vector128.Create(double.PositiveInfinity);
+            var vMin3 = Vector128.Create(double.PositiveInfinity);
+
+            int vectorCount = span.Length - (span.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 2));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 6));
+
+                vMin0 = AdvSimd.Arm64.Min(vMin0, v0);
+                vMin1 = AdvSimd.Arm64.Min(vMin1, v1);
+                vMin2 = AdvSimd.Arm64.Min(vMin2, v2);
+                vMin3 = AdvSimd.Arm64.Min(vMin3, v3);
+            }
+
+            // Combine accumulators
+            vMin0 = AdvSimd.Arm64.Min(vMin0, vMin1);
+            vMin2 = AdvSimd.Arm64.Min(vMin2, vMin3);
+            vMin0 = AdvSimd.Arm64.Min(vMin0, vMin2);
+
+            // Horizontal min (NEON has MinPairwise for this)
+            min = AdvSimd.Arm64.MinPairwiseScalar(vMin0).ToScalar();
+        }
+        else if (Avx.IsSupported && span.Length >= 16)
+        {
+            // x64 AVX path (256-bit = 4 doubles per vector)
+            var vMin0 = Vector256.Create(double.PositiveInfinity);
+            var vMin1 = Vector256.Create(double.PositiveInfinity);
+            var vMin2 = Vector256.Create(double.PositiveInfinity);
+            var vMin3 = Vector256.Create(double.PositiveInfinity);
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vMin0 = Avx.Min(vMin0, v0);
+                vMin1 = Avx.Min(vMin1, v1);
+                vMin2 = Avx.Min(vMin2, v2);
+                vMin3 = Avx.Min(vMin3, v3);
+            }
+
+            // Combine accumulators
+            vMin0 = Avx.Min(vMin0, vMin1);
+            vMin2 = Avx.Min(vMin2, vMin3);
+            vMin0 = Avx.Min(vMin0, vMin2);
+
+            // Horizontal min
+            min = Math.Min(Math.Min(vMin0.GetElement(0), vMin0.GetElement(1)),
+                          Math.Min(vMin0.GetElement(2), vMin0.GetElement(3)));
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            // Fallback to portable SIMD
             var vMin = new Vector<double>(double.PositiveInfinity);
             var vectorCount = span.Length - (span.Length % Vector<double>.Count);
 
@@ -1052,6 +1268,7 @@ public static class SeriesAggregations
             }
         }
 
+        // Scalar remainder
         for (; i < span.Length; i++)
         {
             if (span[i] < min) min = span[i];
@@ -1130,8 +1347,75 @@ public static class SeriesAggregations
         double max = double.NegativeInfinity;
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        ref double ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
         {
+            // ARM NEON path (128-bit = 2 doubles per vector)
+            // Use 4 accumulators for better instruction-level parallelism
+            var vMax0 = Vector128.Create(double.NegativeInfinity);
+            var vMax1 = Vector128.Create(double.NegativeInfinity);
+            var vMax2 = Vector128.Create(double.NegativeInfinity);
+            var vMax3 = Vector128.Create(double.NegativeInfinity);
+
+            int vectorCount = span.Length - (span.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 2));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 6));
+
+                vMax0 = AdvSimd.Arm64.Max(vMax0, v0);
+                vMax1 = AdvSimd.Arm64.Max(vMax1, v1);
+                vMax2 = AdvSimd.Arm64.Max(vMax2, v2);
+                vMax3 = AdvSimd.Arm64.Max(vMax3, v3);
+            }
+
+            // Combine accumulators
+            vMax0 = AdvSimd.Arm64.Max(vMax0, vMax1);
+            vMax2 = AdvSimd.Arm64.Max(vMax2, vMax3);
+            vMax0 = AdvSimd.Arm64.Max(vMax0, vMax2);
+
+            // Horizontal max (NEON has MaxPairwise for this)
+            max = AdvSimd.Arm64.MaxPairwiseScalar(vMax0).ToScalar();
+        }
+        else if (Avx.IsSupported && span.Length >= 16)
+        {
+            // x64 AVX path (256-bit = 4 doubles per vector)
+            var vMax0 = Vector256.Create(double.NegativeInfinity);
+            var vMax1 = Vector256.Create(double.NegativeInfinity);
+            var vMax2 = Vector256.Create(double.NegativeInfinity);
+            var vMax3 = Vector256.Create(double.NegativeInfinity);
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vMax0 = Avx.Max(vMax0, v0);
+                vMax1 = Avx.Max(vMax1, v1);
+                vMax2 = Avx.Max(vMax2, v2);
+                vMax3 = Avx.Max(vMax3, v3);
+            }
+
+            // Combine accumulators
+            vMax0 = Avx.Max(vMax0, vMax1);
+            vMax2 = Avx.Max(vMax2, vMax3);
+            vMax0 = Avx.Max(vMax0, vMax2);
+
+            // Horizontal max
+            max = Math.Max(Math.Max(vMax0.GetElement(0), vMax0.GetElement(1)),
+                          Math.Max(vMax0.GetElement(2), vMax0.GetElement(3)));
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            // Fallback to portable SIMD
             var vMax = new Vector<double>(double.NegativeInfinity);
             var vectorCount = span.Length - (span.Length % Vector<double>.Count);
 
@@ -1146,6 +1430,7 @@ public static class SeriesAggregations
             }
         }
 
+        // Scalar remainder
         for (; i < span.Length; i++)
         {
             if (span[i] > max) max = span[i];
