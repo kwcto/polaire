@@ -257,5 +257,84 @@ Run comparison: `source .venv/bin/activate && python benchmarks/polars_compariso
 4. **Window Functions** - Rolling aggregations, rank, etc.
 5. **More String Operations** - Regex, split, extract, etc.
 6. **Streaming I/O** - Process files larger than memory
-7. **SIMD for Float32** - Currently only Float64/Int32/Int64 optimized
-8. **Architecture-specific intrinsics** - Use AVX2/AVX512 directly for better perf
+
+## Performance Optimization Opportunities
+
+### Quick Wins (Same Patterns)
+These follow the existing SIMD pattern in `SeriesAggregations.cs`:
+
+1. **Float32 SIMD** (~15 min)
+   - Add `SumFloat32`, `MinFloat32`, `MaxFloat32`, `VarFloat32` with SIMD paths
+   - Same pattern as Float64, just change types
+   - Currently falls back to scalar loop
+
+2. **Other Integer Types** (~30 min)
+   - Int8, Int16, UInt8, UInt16, UInt32, UInt64 not yet SIMD optimized
+   - May need widening (Int8 → Int32) to avoid overflow in Sum
+
+### Medium Effort, High Impact
+
+3. **Architecture-Specific Intrinsics** (Biggest potential gain)
+   - Replace `System.Numerics.Vector<T>` with `System.Runtime.Intrinsics`
+   - Use `Avx2`, `Avx512`, `AdvSimd` (ARM NEON) directly
+   - Could close the 2-4x gap with Polars significantly
+   - Example for ARM NEON Sum:
+   ```csharp
+   using System.Runtime.Intrinsics;
+   using System.Runtime.Intrinsics.Arm;
+
+   if (AdvSimd.IsSupported)
+   {
+       var vSum = Vector128<double>.Zero;
+       for (int i = 0; i < vectorCount; i += 2)
+       {
+           var v = AdvSimd.LoadVector128(ptr + i);
+           vSum = AdvSimd.Add(vSum, v);
+       }
+   }
+   ```
+   - Need separate paths for x64 (AVX2/AVX512) and ARM (NEON)
+   - More code but maximum performance
+
+4. **Parallel Aggregations** (~2 hours)
+   - Split large arrays across threads, merge results
+   - Use `Parallel.For` with thread-local accumulators
+   - Threshold: only parallelize above ~100K elements
+   - Watch for false sharing on cache lines
+
+5. **SIMD Filter** (~2 hours)
+   - Vectorized comparison: `Vector.GreaterThan()` returns mask
+   - Use mask to selectively copy matching elements
+   - Current Filter is scalar loop, could be 4-8x faster
+
+### Larger Efforts
+
+6. **SIMD Sort** (1-2 days)
+   - Radix sort for integers (O(n) vs O(n log n))
+   - Vectorized comparison networks for small arrays
+   - Hybrid: SIMD for partitioning in quicksort
+
+7. **Memory Prefetching** (~1 hour)
+   - `Sse.Prefetch*()` hints for upcoming memory access
+   - Useful when traversing large arrays sequentially
+   - Marginal gains on modern CPUs with good prefetchers
+
+8. **Cache-Blocking** (~2 hours)
+   - Process data in L1/L2 cache-sized chunks
+   - Reduces cache misses for multi-pass algorithms (like Var)
+   - Typical block size: 32KB (L1) or 256KB (L2)
+
+### Priority Order for Maximum Impact
+1. Architecture-specific intrinsics (ARM NEON for M1) - could cut gap in half
+2. Parallel aggregations - scales with core count
+3. SIMD Filter - very common operation
+4. Float32 SIMD - quick win for float32 data
+
+### Notes on Polars Performance
+Why Polars is faster:
+- Hand-tuned AVX2/AVX512 assembly for hot paths
+- Rust's zero-cost abstractions
+- Years of micro-optimization
+- SIMD string operations (we use scalar)
+- Parallel by default for large operations
+- Memory-mapped I/O with prefetching
