@@ -128,6 +128,8 @@ public sealed class Series : IEnumerable<AnyValue>
             nameof(Double) => FromNullableDouble(name, values as double?[]),
             nameof(Single) => FromNullableFloat(name, values as float?[]),
             nameof(Boolean) => FromNullableBool(name, values as bool?[]),
+            nameof(DateOnly) => FromNullableDateOnly(name, values as DateOnly?[]),
+            nameof(DateTime) => FromNullableDateTime(name, values as DateTime?[]),
             _ => throw new NotSupportedException($"Nullable {typeof(T).Name} not supported")
         } ?? throw new InvalidOperationException();
     }
@@ -190,6 +192,30 @@ public sealed class Series : IEnumerable<AnyValue>
             else builder.AppendNull();
         }
         return FromArrowArray(name, builder.Build(), DataType.Boolean);
+    }
+
+    private static Series FromNullableDateOnly(string name, DateOnly?[]? values)
+    {
+        if (values is null) throw new ArgumentNullException(nameof(values));
+        var builder = new Date32Array.Builder();
+        foreach (var v in values)
+        {
+            if (v.HasValue) builder.Append(v.Value.ToDateTime(TimeOnly.MinValue));
+            else builder.AppendNull();
+        }
+        return FromArrowArray(name, builder.Build(), DataType.Date);
+    }
+
+    private static Series FromNullableDateTime(string name, DateTime?[]? values)
+    {
+        if (values is null) throw new ArgumentNullException(nameof(values));
+        var builder = new TimestampArray.Builder(Apache.Arrow.Types.TimeUnit.Nanosecond);
+        foreach (var v in values)
+        {
+            if (v.HasValue) builder.Append(new DateTimeOffset(v.Value, TimeSpan.Zero));
+            else builder.AppendNull();
+        }
+        return FromArrowArray(name, builder.Build(), DataType.DateTime(TimeUnit.Nanoseconds));
     }
 
     /// <summary>Creates a series from an Arrow array.</summary>

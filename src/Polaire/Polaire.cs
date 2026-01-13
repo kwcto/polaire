@@ -8,6 +8,7 @@ global using static Polaire.Expressions.Expr;
 
 using Polaire.LazyFrame;
 using Polaire.Expressions;
+using Polaire.IO;
 
 namespace Polaire;
 
@@ -162,42 +163,80 @@ public static class Pl
     public static Expr Count() => Expr.Count();
 
     // ============================================================================
-    // IO (Placeholders)
+    // IO - CSV
     // ============================================================================
 
     /// <summary>Reads a CSV file into a DataFrame.</summary>
     public static DataFrameType ReadCsv(string path, bool hasHeader = true, char separator = ',')
     {
-        // TODO: Implement CSV reader
-        throw new NotImplementedException("CSV reading will be implemented in IO module");
+        return CsvReader.Read(path, new CsvOptions { HasHeader = hasHeader, Separator = separator });
     }
 
-    /// <summary>Scans a CSV file lazily.</summary>
+    /// <summary>Reads a CSV file with full options.</summary>
+    public static DataFrameType ReadCsv(string path, CsvOptions options)
+    {
+        return CsvReader.Read(path, options);
+    }
+
+    /// <summary>Reads a CSV stream into a DataFrame.</summary>
+    public static DataFrameType ReadCsv(Stream stream, CsvOptions? options = null)
+    {
+        return CsvReader.Read(stream, options);
+    }
+
+    /// <summary>Scans a CSV file lazily (enables query optimization).</summary>
     public static LazyFrameType ScanCsv(string path, bool hasHeader = true, char separator = ',')
     {
-        // TODO: Implement lazy CSV scanner
-        throw new NotImplementedException("Lazy CSV scanning will be implemented in IO module");
+        // TODO: Implement true lazy scanning with LogicalPlan.ScanCsv
+        // For now, read eagerly and wrap in LazyFrame
+        return ReadCsv(path, hasHeader, separator).Lazy();
     }
+
+    /// <summary>Scans a CSV file lazily with full options.</summary>
+    public static LazyFrameType ScanCsv(string path, CsvOptions options)
+    {
+        // TODO: Implement true lazy scanning with LogicalPlan.ScanCsv
+        return ReadCsv(path, options).Lazy();
+    }
+
+    // ============================================================================
+    // IO - Parquet
+    // ============================================================================
 
     /// <summary>Reads a Parquet file into a DataFrame.</summary>
-    public static DataFrameType ReadParquet(string path)
+    public static DataFrameType ReadParquet(string path, ParquetOptions? options = null)
     {
-        // TODO: Implement Parquet reader
-        throw new NotImplementedException("Parquet reading will be implemented in IO module");
+        return ParquetReader.Read(path, options);
     }
 
-    /// <summary>Scans a Parquet file lazily.</summary>
+    /// <summary>Scans a Parquet file lazily (enables query optimization).</summary>
     public static LazyFrameType ScanParquet(string path)
     {
-        // TODO: Implement lazy Parquet scanner
-        throw new NotImplementedException("Lazy Parquet scanning will be implemented in IO module");
+        // TODO: Implement true lazy scanning with LogicalPlan.ScanParquet
+        return ReadParquet(path).Lazy();
     }
+
+    // ============================================================================
+    // IO - JSON
+    // ============================================================================
 
     /// <summary>Reads JSON into a DataFrame.</summary>
     public static DataFrameType ReadJson(string path)
     {
-        // TODO: Implement JSON reader
-        throw new NotImplementedException("JSON reading will be implemented in IO module");
+        return JsonReader.Read(path);
+    }
+
+    /// <summary>Reads NDJSON (newline-delimited JSON) into a DataFrame.</summary>
+    public static DataFrameType ReadNdjson(string path)
+    {
+        return NdjsonReader.Read(path);
+    }
+
+    /// <summary>Scans an NDJSON file lazily.</summary>
+    public static LazyFrameType ScanNdjson(string path)
+    {
+        // TODO: Implement true lazy scanning
+        return ReadNdjson(path).Lazy();
     }
 }
 
@@ -225,5 +264,39 @@ public static class PolaireExtensions
     public static void Explain(this LazyFrameType lf, bool optimized = true)
     {
         Console.WriteLine(lf.Explain(optimized));
+    }
+
+    // ============================================================================
+    // IO Extensions
+    // ============================================================================
+
+    /// <summary>Writes the DataFrame to a CSV file.</summary>
+    public static void WriteCsv(this DataFrame df, string path, CsvWriteOptions? options = null)
+    {
+        CsvWriter.Write(df, path, options);
+    }
+
+    /// <summary>Writes the DataFrame to a CSV stream.</summary>
+    public static void WriteCsv(this DataFrame df, Stream stream, CsvWriteOptions? options = null)
+    {
+        CsvWriter.Write(df, stream, options);
+    }
+
+    /// <summary>Converts the DataFrame to a CSV string.</summary>
+    public static string ToCsv(this DataFrame df, CsvWriteOptions? options = null)
+    {
+        return CsvWriter.WriteString(df, options);
+    }
+
+    /// <summary>Writes the DataFrame to a Parquet file.</summary>
+    public static void WriteParquet(this DataFrame df, string path, ParquetWriteOptions? options = null)
+    {
+        ParquetWriter.Write(df, path, options);
+    }
+
+    /// <summary>Writes the DataFrame to a Parquet stream.</summary>
+    public static void WriteParquet(this DataFrame df, Stream stream, ParquetWriteOptions? options = null)
+    {
+        ParquetWriter.Write(df, stream, options);
     }
 }
