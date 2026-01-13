@@ -9,7 +9,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (January 2025)
 
 - **Build:** Passing
-- **Tests:** 255 passing, 0 failing
+- **Tests:** 1194 passing, 0 failing
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
 - **Lazy Scanning:** Implemented with predicate/projection pushdown
@@ -297,6 +297,111 @@ for (int i = 0; i < series.Length; i++)
 ```
 
 **Key Insight**: IEEE 754 SIMD operations propagate NaN, but Polars semantics require skipping NaN. The fix detects when SIMD returns an "invalid" result and falls back to the scalar path which handles NaN correctly.
+
+### Session 10 (Comprehensive Test Suite Expansion - January 2025)
+- **Massive test expansion**: 255 → 1194 tests (+939 new tests)
+- **Fixed build errors** in `ConcatStackTests.cs`:
+  - `LazyFrame.Concat` namespace collision → use `Pl.Concat()`
+  - Removed non-existent `ChunkedArray.FromValues` tests
+- **Created 4 new comprehensive test files**:
+  - `LazyEvaluationTests.cs` (33 tests) - Lazy operations, chained queries, sorting, groupby, joins
+  - `SchemaDataTypesTests.cs` (47 tests) - All 12 numeric types, schema access, AnyValue, special values
+  - `SeriesConstructionTests.cs` (40 tests) - FromValues, FromNullable, naming, properties
+  - `DataFrameConstructionTests.cs` (32 tests) - Construction, select, drop, withColumn
+
+**API Patterns Discovered & Documented:**
+
+1. **Expression Arithmetic** - Use operators, not methods:
+   ```csharp
+   // Correct
+   Col("a") + 10
+   Col("a") * 2
+
+   // Wrong - these methods don't exist
+   Col("a").Add(10)
+   Col("a").Mul(2)
+   ```
+
+2. **Sort with Descending** - Uses tuple syntax:
+   ```csharp
+   // Correct
+   .Sort((Col("total"), true))  // descending
+   .Sort((Col("a"), false))     // ascending
+
+   // Wrong
+   .Sort(Col("a"), descending: true)
+   ```
+
+3. **Schema Access** - Schema is list of tuples, not dictionary:
+   ```csharp
+   // Correct
+   df.Schema[0].Name
+   df.Schema[0].Type
+
+   // Wrong - doesn't exist
+   df.Schema["col_name"]
+   ```
+
+4. **Null Handling Methods**:
+   ```csharp
+   // Correct
+   Col("a").IsNotNullExpr()
+   Col("a").FillNullWith(0)
+
+   // Wrong
+   Col("a").IsNotNull()   // This is a property, not method
+   Col("a").FillNull(0)
+   ```
+
+5. **Static Concat** - Use `Pl.Concat()`:
+   ```csharp
+   // Correct
+   Pl.Concat(df1.Lazy(), df2.Lazy())
+
+   // Wrong - namespace collision
+   LazyFrame.Concat(...)
+   ```
+
+6. **Byte Access on AnyValue**:
+   ```csharp
+   // Correct
+   value.AsUInt8()
+
+   // Wrong
+   value.AsByte()
+   ```
+
+7. **Row Access** - No direct row access, use Series indexing:
+   ```csharp
+   // Correct
+   df["col_name"][rowIndex]
+
+   // Wrong - doesn't exist
+   df.Row(rowIndex)
+   ```
+
+8. **Series Rename** - Use `Rename()` method:
+   ```csharp
+   // Correct
+   series.Rename("new_name")
+
+   // Wrong - Alias only exists on Expr
+   series.Alias("new_name")
+   ```
+
+9. **Multiplication Result Type** - Returns Float64, not Int32:
+   ```csharp
+   // Multiplication promotes to Float64
+   var result = df.Lazy()
+       .WithColumns((Col("a") * 2).As("doubled"))
+       .Collect();
+   result["doubled"][0].AsFloat64()  // Use Float64, not Int32
+   ```
+
+**Key Files Modified:**
+- `tests/Polaire.Tests/ConcatStackTests.cs` (fixed build errors)
+- Created 4 new test files (152 tests total)
+- Also includes 787 tests ported from other test file expansions in the session
 
 ## Design Objectives (from original requirements)
 
