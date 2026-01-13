@@ -79,7 +79,7 @@ polaire/
 - `MemoryPool.Memory<T>` property creates a copy (performance impact)
 - `VectorScalarOp` uses scalar fallback (SIMD optimization removed due to delegate comparison issue)
 - XML documentation incomplete (CS1591 warnings suppressed)
-- Float32 aggregations not yet SIMD optimized (only Float64, Int32, Int64)
+- Parallel aggregations disabled (threshold=10M) due to array copy overhead from lambda capture limitations
 
 ## Dependencies
 
@@ -207,6 +207,37 @@ if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
 }
 ```
 
+### Session 8 (Float32 + Binary SIMD + Parallel - January 2025)
+- **Float32 Intrinsics**: Added ARM NEON/AVX for `SumFloat32`, `MinFloat32`, `MaxFloat32`
+  - `Vector128<float>` = 4 elements (vs 2 for double)
+  - Process 16 elements per iteration with 4 accumulators
+  - Two pairwise operations for horizontal float reduction
+- **SIMD Binary Operations**: Updated `VectorAdd/Sub/Mul/Div` with architecture-specific intrinsics
+  - Replaced `System.Numerics.Vector<T>` with `AdvSimd.Arm64` and `Avx` paths
+  - ~6% improvement for binary ops at 1M elements (memory-bound operation)
+- **Parallel Aggregations**: Added `SumParallel/MinParallel/MaxParallel` with `Parallel.For`
+  - Uses `unsafe` fixed pointers (ref locals can't be captured in lambdas)
+  - Array copy overhead negates benefits for <10M elements
+  - Threshold set to 10M to avoid regression
+
+**Float32 Intrinsics Pattern:**
+```csharp
+if (AdvSimd.IsSupported && span.Length >= 16)
+{
+    var vSum0 = Vector128<float>.Zero;
+    // ... 4 accumulators
+    for (; i < vectorCount; i += 16)
+    {
+        var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+        vSum0 = AdvSimd.Add(vSum0, v0);  // Note: AdvSimd (not Arm64) for float
+    }
+    // Two pairwise ops for 4-element horizontal sum
+    var pairwise1 = AdvSimd.Arm64.AddPairwise(vSum0, vSum0);
+    var pairwise2 = AdvSimd.Arm64.AddPairwise(pairwise1, pairwise1);
+    sum = pairwise2.GetElement(0);
+}
+```
+
 ## Design Objectives (from original requirements)
 
 1. **Feature Parity** - Match Polars functionality
@@ -279,7 +310,7 @@ var result = ScanCsv("large.csv")
 | Min | 132 ns | 0.9 µs | 9.5 µs | 107 µs |
 | Max | 132 ns | 0.9 µs | 9.6 µs | 104 µs |
 | Std | 300 ns | 2.6 µs | 25 µs | 269 µs |
-| Addition | 6 µs | 56 µs | 691 µs | 6.7 ms |
+| Addition | 6 µs | 52 µs | 580 µs | 6.3 ms |
 
 ### DataFrame Operations
 | Operation | 1K | 10K | 100K |
@@ -315,9 +346,9 @@ Run comparison: `source .venv/bin/activate && python benchmarks/polars_compariso
 
 ### Priority Order for Maximum Impact
 1. ~~Architecture-specific intrinsics~~ ✓ DONE (3.5x improvement)
-2. **Float32 intrinsics** - Quick win, same pattern (~15 min)
-3. **SIMD Binary Operations** - Add/Sub/Mul/Div use old Vector<T> (~30 min)
-4. **Parallel Aggregations** - Scales with core count (~2 hours)
+2. ~~**Float32 intrinsics**~~ ✓ DONE (Session 8)
+3. ~~**SIMD Binary Operations**~~ ✓ DONE (Session 8, ~6% improvement)
+4. ~~**Parallel Aggregations**~~ ✓ DONE (Session 8, threshold=10M due to copy overhead)
 5. **SIMD Filter** - Very common operation (~2 hours)
 6. **Integer type intrinsics** - Complete coverage (~1 hour)
 
@@ -682,17 +713,17 @@ for (int blockStart = 0; blockStart < span.Length; blockStart += BlockSize)
 
 ### Summary: Recommended Order for Future Sessions
 
-| Priority | Optimization | Effort | Expected Gain |
-|----------|-------------|--------|---------------|
-| 1 | Float32 intrinsics | 15 min | 3-4x for float data |
-| 2 | SIMD Binary Ops | 30 min | 1.5-2x for arithmetic |
-| 3 | Parallel Aggregations | 2 hours | 4-8x for large arrays |
-| 4 | SIMD Filter | 2 hours | 4-8x for filtering |
-| 5 | Integer intrinsics | 1 hour | 2-3x for int data |
-| 6 | String SIMD | 4 hours | 2-4x for string ops |
-| 7 | Cache-blocking | 2 hours | 10-20% for Var/Std |
-| 8 | Memory prefetching | 1 hour | 0-10% marginal |
-| 9 | SIMD Sort | 1-2 days | Complex, skip for now |
+| Priority | Optimization | Effort | Expected Gain | Status |
+|----------|-------------|--------|---------------|--------|
+| 1 | Float32 intrinsics | 15 min | 3-4x for float data | ✅ DONE |
+| 2 | SIMD Binary Ops | 30 min | ~6% for arithmetic | ✅ DONE |
+| 3 | Parallel Aggregations | 2 hours | Limited (see notes) | ✅ DONE |
+| 4 | SIMD Filter | 2 hours | 4-8x for filtering | TODO |
+| 5 | Integer intrinsics | 1 hour | 2-3x for int data | TODO |
+| 6 | String SIMD | 4 hours | 2-4x for string ops | TODO |
+| 7 | Cache-blocking | 2 hours | 10-20% for Var/Std | TODO |
+| 8 | Memory prefetching | 1 hour | 0-10% marginal | TODO |
+| 9 | SIMD Sort | 1-2 days | Complex, skip for now | SKIP |
 
 ---
 
@@ -902,3 +933,149 @@ Our Std is 2.3x faster than Polars because:
 2. The inner loop does: subtract → multiply → add (3 ops)
 3. With 4 independent chains, all 3 ops overlap across iterations
 4. Polars may use a different algorithm (online/streaming) that has more dependencies
+
+---
+
+## Session 8 Lessons Learned: Parallel Processing Pitfalls
+
+This section documents critical lessons from Session 8 about parallel processing in .NET.
+
+### The Problem: Span/Ref Can't Be Captured in Lambdas
+
+When attempting to parallelize aggregations:
+
+```csharp
+// THIS DOES NOT COMPILE - CS8175 error
+private static double SumParallel(ReadOnlySpan<double> span)
+{
+    ref double ptr = ref MemoryMarshal.GetReference(span);
+
+    Parallel.For(0, numChunks, chunkIndex =>
+    {
+        // ERROR: Cannot use ref local 'ptr' inside a lambda
+        var v = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, start));
+    });
+}
+```
+
+**Why:** `ReadOnlySpan<T>` is a `ref struct` (stack-only), and `ref local` variables cannot be captured in lambdas because:
+1. Lambdas may outlive the stack frame
+2. The CLR cannot guarantee the referenced memory remains valid
+3. This is a fundamental safety constraint in C#
+
+### The Workaround: Unsafe Fixed Pointers
+
+```csharp
+private static unsafe double SumParallel(ReadOnlySpan<double> span)
+{
+    // MUST copy to array - span can't be pinned directly
+    var array = span.ToArray();  // <-- This is the overhead!
+
+    int numChunks = (array.Length + ChunkSize - 1) / ChunkSize;
+    var partialSums = new double[numChunks];
+
+    fixed (double* basePtr = array)
+    {
+        double* ptr = basePtr;  // Raw pointer CAN be captured
+        int length = array.Length;
+
+        Parallel.For(0, numChunks, chunkIndex =>
+        {
+            double* chunkPtr = ptr + (chunkIndex * ChunkSize);
+            // ... SIMD processing with raw pointers
+        });
+    }
+
+    // Merge partial results
+    return partialSums.Sum();
+}
+```
+
+### Why This Approach Has Limited Benefit
+
+| Array Size | Copy Overhead | SIMD Time | Parallel Benefit | Net Result |
+|------------|--------------|-----------|-----------------|------------|
+| 100K | ~100 µs | ~10 µs | ~4x | **Slower** (copy dominates) |
+| 1M | ~1 ms | ~100 µs | ~4x | **Slower** (copy dominates) |
+| 10M+ | ~10 ms | ~1 ms | ~4x | **Faster** (finally worth it) |
+
+**Key insight:** The `span.ToArray()` copy is O(n), and SIMD is already so fast that the copy overhead exceeds the parallel speedup for arrays under ~10M elements.
+
+### Current Implementation
+
+```csharp
+// Threshold set very high to avoid regression
+private const int ParallelThreshold = 10_000_000;  // 10M elements (~80MB)
+private const int ChunkSize = 65_536;  // ~512KB for cache efficiency
+```
+
+### Alternative Approaches (Not Yet Implemented)
+
+1. **Memory<T> Instead of Span<T>**
+   - `Memory<T>` can be pinned and captured, but Polaire's `ChunkedArray<T>` returns spans
+   - Would require significant refactoring
+
+2. **ArrayPool Reuse**
+   - Rent arrays from pool to reduce allocation
+   - Still has copy overhead
+
+3. **Unsafe.AsPointer on Original Array**
+   - If we know the span came from an array, get pointer directly
+   - Requires knowing the backing store
+
+4. **Parallel at Higher Level**
+   - Parallelize across chunks in ChunkedArray instead of within a single span
+   - More natural fit for Arrow's chunked model
+
+### Float32 vs Float64 Intrinsics Differences
+
+| Aspect | Float64 (`double`) | Float32 (`float`) |
+|--------|-------------------|-------------------|
+| Vector128 elements | 2 | 4 |
+| Elements per iteration | 8 (4 vectors × 2) | 16 (4 vectors × 4) |
+| Add/Min/Max instruction | `AdvSimd.Arm64.Add` | `AdvSimd.Add` (base class!) |
+| Horizontal reduction | `AddPairwiseScalar` (1 op) | `AddPairwise` × 2 |
+
+**Critical difference:** Float operations use `AdvSimd.Add` (not `AdvSimd.Arm64.Add`):
+```csharp
+// Float64 - uses Arm64 namespace
+vSum0 = AdvSimd.Arm64.Add(vSum0, v0);
+
+// Float32 - uses base AdvSimd class (NO Arm64!)
+vSum0 = AdvSimd.Add(vSum0, v0);
+```
+
+### Float32 Horizontal Reduction Pattern
+
+```csharp
+// Float64: Single pairwise scalar (2 elements → 1)
+sum = AdvSimd.Arm64.AddPairwiseScalar(vSum0).ToScalar();
+
+// Float32: Two pairwise operations (4 elements → 2 → 1)
+var pairwise1 = AdvSimd.Arm64.AddPairwise(vSum0, vSum0);  // 4→2
+var pairwise2 = AdvSimd.Arm64.AddPairwise(pairwise1, pairwise1);  // 2→1
+sum = pairwise2.GetElement(0);
+```
+
+### Binary Operations: Memory-Bound Reality
+
+SIMD binary operations (Add/Sub/Mul/Div) showed only ~6% improvement because:
+
+1. **Memory bandwidth is the bottleneck**, not compute
+2. Each operation reads 2 arrays and writes 1 (3× memory traffic vs 1× for aggregations)
+3. The CPU can't process data faster than memory can deliver it
+
+```
+Aggregation: Read 1 array → Compute → Return scalar
+             Compute-bound, SIMD helps a lot
+
+Binary Op:   Read 2 arrays → Compute → Write 1 array
+             Memory-bound, SIMD helps little
+```
+
+### Recommendations for Future Sessions
+
+1. **Skip parallel for now** - SIMD is already fast enough for typical data science workloads
+2. **Focus on SIMD Filter next** - Common operation with good optimization potential
+3. **Consider chunk-level parallelism** - More natural for Arrow's chunked model
+4. **Profile before optimizing** - Use BenchmarkDotNet to identify actual bottlenecks

@@ -18,7 +18,7 @@ The .NET ecosystem has lacked a truly modern DataFrame library. While Python dev
 Polaire is a ground-up implementation inspired by Polars, built specifically for .NET with:
 
 - **Apache Arrow** columnar memory format for zero-copy interop
-- **SIMD-optimized** operations using `System.Numerics.Vector<T>`
+- **SIMD-optimized** operations using architecture-specific intrinsics (ARM NEON / x64 AVX)
 - **Lazy evaluation** with query optimization (predicate pushdown, projection pushdown, constant folding)
 - **Expression-based API** that's both powerful and readable
 - **Full null handling** with validity bitmaps (1 bit per value)

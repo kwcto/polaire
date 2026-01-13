@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 using Apache.Arrow;
 using Polaire.DataTypes;
@@ -283,9 +284,59 @@ public static class SeriesArithmetic
     {
         int i = 0;
 
-        // Use SIMD if available
-        if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
+        ref double lPtr = ref MemoryMarshal.GetReference(left);
+        ref double rPtr = ref MemoryMarshal.GetReference(right);
+        ref double outPtr = ref MemoryMarshal.GetReference(result);
+
+        if (AdvSimd.Arm64.IsSupported && left.Length >= 8)
         {
+            // ARM NEON path (128-bit = 2 doubles per vector)
+            int vectorCount = left.Length - (left.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var l0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 2));
+                var l2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 6));
+
+                var r0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 2));
+                var r2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 6));
+
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l1, r1), ref Unsafe.Add(ref outPtr, i + 2));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l2, r2), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l3, r3), ref Unsafe.Add(ref outPtr, i + 6));
+            }
+        }
+        else if (Avx.IsSupported && left.Length >= 16)
+        {
+            // x64 AVX path (256-bit = 4 doubles per vector)
+            int vectorCount = left.Length - (left.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var l0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 8));
+                var l3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 12));
+
+                var r0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 8));
+                var r3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 12));
+
+                Vector256.StoreUnsafe(Avx.Add(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector256.StoreUnsafe(Avx.Add(l1, r1), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector256.StoreUnsafe(Avx.Add(l2, r2), ref Unsafe.Add(ref outPtr, i + 8));
+                Vector256.StoreUnsafe(Avx.Add(l3, r3), ref Unsafe.Add(ref outPtr, i + 12));
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
+        {
+            // Fallback to portable SIMD
             var vectorCount = left.Length - (left.Length % Vector<double>.Count);
             for (; i < vectorCount; i += Vector<double>.Count)
             {
@@ -307,7 +358,57 @@ public static class SeriesArithmetic
     {
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
+        ref double lPtr = ref MemoryMarshal.GetReference(left);
+        ref double rPtr = ref MemoryMarshal.GetReference(right);
+        ref double outPtr = ref MemoryMarshal.GetReference(result);
+
+        if (AdvSimd.Arm64.IsSupported && left.Length >= 8)
+        {
+            // ARM NEON path
+            int vectorCount = left.Length - (left.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var l0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 2));
+                var l2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 6));
+
+                var r0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 2));
+                var r2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 6));
+
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Subtract(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Subtract(l1, r1), ref Unsafe.Add(ref outPtr, i + 2));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Subtract(l2, r2), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Subtract(l3, r3), ref Unsafe.Add(ref outPtr, i + 6));
+            }
+        }
+        else if (Avx.IsSupported && left.Length >= 16)
+        {
+            // x64 AVX path
+            int vectorCount = left.Length - (left.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var l0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 8));
+                var l3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 12));
+
+                var r0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 8));
+                var r3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 12));
+
+                Vector256.StoreUnsafe(Avx.Subtract(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector256.StoreUnsafe(Avx.Subtract(l1, r1), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector256.StoreUnsafe(Avx.Subtract(l2, r2), ref Unsafe.Add(ref outPtr, i + 8));
+                Vector256.StoreUnsafe(Avx.Subtract(l3, r3), ref Unsafe.Add(ref outPtr, i + 12));
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
         {
             var vectorCount = left.Length - (left.Length % Vector<double>.Count);
             for (; i < vectorCount; i += Vector<double>.Count)
@@ -329,7 +430,57 @@ public static class SeriesArithmetic
     {
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
+        ref double lPtr = ref MemoryMarshal.GetReference(left);
+        ref double rPtr = ref MemoryMarshal.GetReference(right);
+        ref double outPtr = ref MemoryMarshal.GetReference(result);
+
+        if (AdvSimd.Arm64.IsSupported && left.Length >= 8)
+        {
+            // ARM NEON path
+            int vectorCount = left.Length - (left.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var l0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 2));
+                var l2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 6));
+
+                var r0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 2));
+                var r2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 6));
+
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Multiply(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Multiply(l1, r1), ref Unsafe.Add(ref outPtr, i + 2));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Multiply(l2, r2), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Multiply(l3, r3), ref Unsafe.Add(ref outPtr, i + 6));
+            }
+        }
+        else if (Avx.IsSupported && left.Length >= 16)
+        {
+            // x64 AVX path
+            int vectorCount = left.Length - (left.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var l0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 8));
+                var l3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 12));
+
+                var r0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 8));
+                var r3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 12));
+
+                Vector256.StoreUnsafe(Avx.Multiply(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector256.StoreUnsafe(Avx.Multiply(l1, r1), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector256.StoreUnsafe(Avx.Multiply(l2, r2), ref Unsafe.Add(ref outPtr, i + 8));
+                Vector256.StoreUnsafe(Avx.Multiply(l3, r3), ref Unsafe.Add(ref outPtr, i + 12));
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
         {
             var vectorCount = left.Length - (left.Length % Vector<double>.Count);
             for (; i < vectorCount; i += Vector<double>.Count)
@@ -351,7 +502,57 @@ public static class SeriesArithmetic
     {
         int i = 0;
 
-        if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
+        ref double lPtr = ref MemoryMarshal.GetReference(left);
+        ref double rPtr = ref MemoryMarshal.GetReference(right);
+        ref double outPtr = ref MemoryMarshal.GetReference(result);
+
+        if (AdvSimd.Arm64.IsSupported && left.Length >= 8)
+        {
+            // ARM NEON path
+            int vectorCount = left.Length - (left.Length % 8);
+
+            for (; i < vectorCount; i += 8)
+            {
+                var l0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 2));
+                var l2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 6));
+
+                var r0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 2));
+                var r2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 6));
+
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Divide(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Divide(l1, r1), ref Unsafe.Add(ref outPtr, i + 2));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Divide(l2, r2), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector128.StoreUnsafe(AdvSimd.Arm64.Divide(l3, r3), ref Unsafe.Add(ref outPtr, i + 6));
+            }
+        }
+        else if (Avx.IsSupported && left.Length >= 16)
+        {
+            // x64 AVX path
+            int vectorCount = left.Length - (left.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var l0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+                var l1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+                var l2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 8));
+                var l3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 12));
+
+                var r0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+                var r1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+                var r2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 8));
+                var r3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 12));
+
+                Vector256.StoreUnsafe(Avx.Divide(l0, r0), ref Unsafe.Add(ref outPtr, i));
+                Vector256.StoreUnsafe(Avx.Divide(l1, r1), ref Unsafe.Add(ref outPtr, i + 4));
+                Vector256.StoreUnsafe(Avx.Divide(l2, r2), ref Unsafe.Add(ref outPtr, i + 8));
+                Vector256.StoreUnsafe(Avx.Divide(l3, r3), ref Unsafe.Add(ref outPtr, i + 12));
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && left.Length >= Vector<double>.Count)
         {
             var vectorCount = left.Length - (left.Length % Vector<double>.Count);
             for (; i < vectorCount; i += Vector<double>.Count)

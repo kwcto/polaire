@@ -18,6 +18,11 @@ namespace Polaire.Compute;
 /// </summary>
 public static class SeriesAggregations
 {
+    // Threshold for parallel processing - set high because SIMD is already fast
+    // and the array copy overhead negates parallelism benefits for smaller arrays
+    private const int ParallelThreshold = 10_000_000;  // 10M elements (~80MB for doubles)
+    private const int ChunkSize = 65_536;  // ~512KB per chunk for better cache efficiency
+
     // ============================================================================
     // Sum
     // ============================================================================
@@ -97,7 +102,15 @@ public static class SeriesAggregations
         if (!series.HasNulls && data.ChunkCount == 1)
         {
             var span = data.GetChunkSpan(0);
-            sum = SumVectorized(span);
+            if (span.Length >= ParallelThreshold)
+            {
+                // Parallel path for large arrays
+                sum = SumParallel(span);
+            }
+            else
+            {
+                sum = SumVectorized(span);
+            }
         }
         else
         {
@@ -200,10 +213,19 @@ public static class SeriesAggregations
         if (data is null) return AnyValue.Null;
 
         double sum = 0; // Use double for precision
-        for (int i = 0; i < series.Length; i++)
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
-                sum += data.GetValue(i);
+            // SIMD path
+            var span = data.GetChunkSpan(0);
+            sum = SumVectorizedFloat32(span);
+        }
+        else
+        {
+            for (int i = 0; i < series.Length; i++)
+            {
+                if (!series.IsNull(i))
+                    sum += data.GetValue(i);
+            }
         }
         return AnyValue.From(sum);
     }
@@ -299,21 +321,34 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<float>;
         if (data is null) return AnyValue.Null;
 
-        float min = float.PositiveInfinity;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        float min;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path (note: NaN handling differs - NaN propagates)
+            var span = data.GetChunkSpan(0);
+            min = MinVectorizedFloat32(span);
+            if (float.IsNaN(min) || float.IsPositiveInfinity(min))
+                return AnyValue.Null;
+        }
+        else
+        {
+            min = float.PositiveInfinity;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (!float.IsNaN(val) && val < min)
+                if (!series.IsNull(i))
                 {
-                    min = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (!float.IsNaN(val) && val < min)
+                    {
+                        min = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(min) : AnyValue.Null;
+        return AnyValue.From(min);
     }
 
     private static AnyValue MinFloat64(Series series)
@@ -326,7 +361,14 @@ public static class SeriesAggregations
         {
             // SIMD path (note: NaN handling differs - NaN propagates)
             var span = data.GetChunkSpan(0);
-            min = MinVectorized(span);
+            if (span.Length >= ParallelThreshold)
+            {
+                min = MinParallel(span);
+            }
+            else
+            {
+                min = MinVectorized(span);
+            }
             if (double.IsNaN(min) || double.IsPositiveInfinity(min))
                 return AnyValue.Null;
         }
@@ -484,21 +526,34 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<float>;
         if (data is null) return AnyValue.Null;
 
-        float max = float.NegativeInfinity;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        float max;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path (note: NaN handling differs - NaN propagates)
+            var span = data.GetChunkSpan(0);
+            max = MaxVectorizedFloat32(span);
+            if (float.IsNaN(max) || float.IsNegativeInfinity(max))
+                return AnyValue.Null;
+        }
+        else
+        {
+            max = float.NegativeInfinity;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (!float.IsNaN(val) && val > max)
+                if (!series.IsNull(i))
                 {
-                    max = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (!float.IsNaN(val) && val > max)
+                    {
+                        max = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(max) : AnyValue.Null;
+        return AnyValue.From(max);
     }
 
     private static AnyValue MaxFloat64(Series series)
@@ -511,7 +566,14 @@ public static class SeriesAggregations
         {
             // SIMD path (note: NaN handling differs - NaN propagates)
             var span = data.GetChunkSpan(0);
-            max = MaxVectorized(span);
+            if (span.Length >= ParallelThreshold)
+            {
+                max = MaxParallel(span);
+            }
+            else
+            {
+                max = MaxVectorized(span);
+            }
             if (double.IsNaN(max) || double.IsNegativeInfinity(max))
                 return AnyValue.Null;
         }
@@ -1425,6 +1487,597 @@ public static class SeriesAggregations
             }
 
             for (int j = 0; j < Vector<double>.Count; j++)
+            {
+                if (vMax[j] > max) max = vMax[j];
+            }
+        }
+
+        // Scalar remainder
+        for (; i < span.Length; i++)
+        {
+            if (span[i] > max) max = span[i];
+        }
+
+        return max;
+    }
+
+    // ============================================================================
+    // Parallel Aggregation Helpers (for arrays > 100K elements)
+    // ============================================================================
+
+    private static unsafe double SumParallel(ReadOnlySpan<double> span)
+    {
+        // For parallel processing, we need to copy to an array since spans can't be captured
+        // The overhead is amortized for large arrays (>100K elements)
+        var array = span.ToArray();
+        int numChunks = (array.Length + ChunkSize - 1) / ChunkSize;
+        var partialSums = new double[numChunks];
+
+        fixed (double* basePtr = array)
+        {
+            double* ptr = basePtr;  // Capture pointer value, not the fixed statement
+            int length = array.Length;
+
+            Parallel.For(0, numChunks, chunkIndex =>
+            {
+                int start = chunkIndex * ChunkSize;
+                int chunkLength = Math.Min(ChunkSize, length - start);
+
+                // Process this chunk using SIMD
+                double chunkSum = 0;
+                int i = 0;
+                double* chunkPtr = ptr + start;
+
+                if (AdvSimd.Arm64.IsSupported && chunkLength >= 8)
+                {
+                    var vSum0 = Vector128<double>.Zero;
+                    var vSum1 = Vector128<double>.Zero;
+                    var vSum2 = Vector128<double>.Zero;
+                    var vSum3 = Vector128<double>.Zero;
+
+                    int vectorCount = chunkLength - (chunkLength % 8);
+
+                    for (; i < vectorCount; i += 8)
+                    {
+                        var v0 = AdvSimd.LoadVector128(chunkPtr + i);
+                        var v1 = AdvSimd.LoadVector128(chunkPtr + i + 2);
+                        var v2 = AdvSimd.LoadVector128(chunkPtr + i + 4);
+                        var v3 = AdvSimd.LoadVector128(chunkPtr + i + 6);
+
+                        vSum0 = AdvSimd.Arm64.Add(vSum0, v0);
+                        vSum1 = AdvSimd.Arm64.Add(vSum1, v1);
+                        vSum2 = AdvSimd.Arm64.Add(vSum2, v2);
+                        vSum3 = AdvSimd.Arm64.Add(vSum3, v3);
+                    }
+
+                    vSum0 = AdvSimd.Arm64.Add(vSum0, vSum1);
+                    vSum2 = AdvSimd.Arm64.Add(vSum2, vSum3);
+                    vSum0 = AdvSimd.Arm64.Add(vSum0, vSum2);
+                    chunkSum = AdvSimd.Arm64.AddPairwiseScalar(vSum0).ToScalar();
+                }
+                else if (Avx.IsSupported && chunkLength >= 16)
+                {
+                    var vSum0 = Vector256<double>.Zero;
+                    var vSum1 = Vector256<double>.Zero;
+                    var vSum2 = Vector256<double>.Zero;
+                    var vSum3 = Vector256<double>.Zero;
+
+                    int vectorCount = chunkLength - (chunkLength % 16);
+
+                    for (; i < vectorCount; i += 16)
+                    {
+                        var v0 = Avx.LoadVector256(chunkPtr + i);
+                        var v1 = Avx.LoadVector256(chunkPtr + i + 4);
+                        var v2 = Avx.LoadVector256(chunkPtr + i + 8);
+                        var v3 = Avx.LoadVector256(chunkPtr + i + 12);
+
+                        vSum0 = Avx.Add(vSum0, v0);
+                        vSum1 = Avx.Add(vSum1, v1);
+                        vSum2 = Avx.Add(vSum2, v2);
+                        vSum3 = Avx.Add(vSum3, v3);
+                    }
+
+                    vSum0 = Avx.Add(vSum0, vSum1);
+                    vSum2 = Avx.Add(vSum2, vSum3);
+                    vSum0 = Avx.Add(vSum0, vSum2);
+                    chunkSum = vSum0.GetElement(0) + vSum0.GetElement(1) + vSum0.GetElement(2) + vSum0.GetElement(3);
+                }
+
+                // Scalar remainder
+                for (; i < chunkLength; i++)
+                    chunkSum += chunkPtr[i];
+
+                partialSums[chunkIndex] = chunkSum;
+            });
+        }
+
+        // Merge partial sums
+        double total = 0;
+        for (int i = 0; i < numChunks; i++)
+            total += partialSums[i];
+
+        return total;
+    }
+
+    private static unsafe double MinParallel(ReadOnlySpan<double> span)
+    {
+        var array = span.ToArray();
+        int numChunks = (array.Length + ChunkSize - 1) / ChunkSize;
+        var partialMins = new double[numChunks];
+
+        fixed (double* basePtr = array)
+        {
+            double* ptr = basePtr;
+            int length = array.Length;
+
+            Parallel.For(0, numChunks, chunkIndex =>
+            {
+                int start = chunkIndex * ChunkSize;
+                int chunkLength = Math.Min(ChunkSize, length - start);
+
+                double chunkMin = double.PositiveInfinity;
+                int i = 0;
+                double* chunkPtr = ptr + start;
+
+                if (AdvSimd.Arm64.IsSupported && chunkLength >= 8)
+                {
+                    var vMin0 = Vector128.Create(double.PositiveInfinity);
+                    var vMin1 = Vector128.Create(double.PositiveInfinity);
+                    var vMin2 = Vector128.Create(double.PositiveInfinity);
+                    var vMin3 = Vector128.Create(double.PositiveInfinity);
+
+                    int vectorCount = chunkLength - (chunkLength % 8);
+
+                    for (; i < vectorCount; i += 8)
+                    {
+                        var v0 = AdvSimd.LoadVector128(chunkPtr + i);
+                        var v1 = AdvSimd.LoadVector128(chunkPtr + i + 2);
+                        var v2 = AdvSimd.LoadVector128(chunkPtr + i + 4);
+                        var v3 = AdvSimd.LoadVector128(chunkPtr + i + 6);
+
+                        vMin0 = AdvSimd.Arm64.Min(vMin0, v0);
+                        vMin1 = AdvSimd.Arm64.Min(vMin1, v1);
+                        vMin2 = AdvSimd.Arm64.Min(vMin2, v2);
+                        vMin3 = AdvSimd.Arm64.Min(vMin3, v3);
+                    }
+
+                    vMin0 = AdvSimd.Arm64.Min(vMin0, vMin1);
+                    vMin2 = AdvSimd.Arm64.Min(vMin2, vMin3);
+                    vMin0 = AdvSimd.Arm64.Min(vMin0, vMin2);
+                    chunkMin = AdvSimd.Arm64.MinPairwiseScalar(vMin0).ToScalar();
+                }
+                else if (Avx.IsSupported && chunkLength >= 16)
+                {
+                    var vMin0 = Vector256.Create(double.PositiveInfinity);
+                    var vMin1 = Vector256.Create(double.PositiveInfinity);
+                    var vMin2 = Vector256.Create(double.PositiveInfinity);
+                    var vMin3 = Vector256.Create(double.PositiveInfinity);
+
+                    int vectorCount = chunkLength - (chunkLength % 16);
+
+                    for (; i < vectorCount; i += 16)
+                    {
+                        var v0 = Avx.LoadVector256(chunkPtr + i);
+                        var v1 = Avx.LoadVector256(chunkPtr + i + 4);
+                        var v2 = Avx.LoadVector256(chunkPtr + i + 8);
+                        var v3 = Avx.LoadVector256(chunkPtr + i + 12);
+
+                        vMin0 = Avx.Min(vMin0, v0);
+                        vMin1 = Avx.Min(vMin1, v1);
+                        vMin2 = Avx.Min(vMin2, v2);
+                        vMin3 = Avx.Min(vMin3, v3);
+                    }
+
+                    vMin0 = Avx.Min(vMin0, vMin1);
+                    vMin2 = Avx.Min(vMin2, vMin3);
+                    vMin0 = Avx.Min(vMin0, vMin2);
+                    chunkMin = Math.Min(Math.Min(vMin0.GetElement(0), vMin0.GetElement(1)),
+                                       Math.Min(vMin0.GetElement(2), vMin0.GetElement(3)));
+                }
+
+                for (; i < chunkLength; i++)
+                {
+                    var val = chunkPtr[i];
+                    if (val < chunkMin) chunkMin = val;
+                }
+
+                partialMins[chunkIndex] = chunkMin;
+            });
+        }
+
+        double min = double.PositiveInfinity;
+        for (int i = 0; i < numChunks; i++)
+        {
+            if (partialMins[i] < min) min = partialMins[i];
+        }
+
+        return min;
+    }
+
+    private static unsafe double MaxParallel(ReadOnlySpan<double> span)
+    {
+        var array = span.ToArray();
+        int numChunks = (array.Length + ChunkSize - 1) / ChunkSize;
+        var partialMaxs = new double[numChunks];
+
+        fixed (double* basePtr = array)
+        {
+            double* ptr = basePtr;
+            int length = array.Length;
+
+            Parallel.For(0, numChunks, chunkIndex =>
+            {
+                int start = chunkIndex * ChunkSize;
+                int chunkLength = Math.Min(ChunkSize, length - start);
+
+                double chunkMax = double.NegativeInfinity;
+                int i = 0;
+                double* chunkPtr = ptr + start;
+
+                if (AdvSimd.Arm64.IsSupported && chunkLength >= 8)
+                {
+                    var vMax0 = Vector128.Create(double.NegativeInfinity);
+                    var vMax1 = Vector128.Create(double.NegativeInfinity);
+                    var vMax2 = Vector128.Create(double.NegativeInfinity);
+                    var vMax3 = Vector128.Create(double.NegativeInfinity);
+
+                    int vectorCount = chunkLength - (chunkLength % 8);
+
+                    for (; i < vectorCount; i += 8)
+                    {
+                        var v0 = AdvSimd.LoadVector128(chunkPtr + i);
+                        var v1 = AdvSimd.LoadVector128(chunkPtr + i + 2);
+                        var v2 = AdvSimd.LoadVector128(chunkPtr + i + 4);
+                        var v3 = AdvSimd.LoadVector128(chunkPtr + i + 6);
+
+                        vMax0 = AdvSimd.Arm64.Max(vMax0, v0);
+                        vMax1 = AdvSimd.Arm64.Max(vMax1, v1);
+                        vMax2 = AdvSimd.Arm64.Max(vMax2, v2);
+                        vMax3 = AdvSimd.Arm64.Max(vMax3, v3);
+                    }
+
+                    vMax0 = AdvSimd.Arm64.Max(vMax0, vMax1);
+                    vMax2 = AdvSimd.Arm64.Max(vMax2, vMax3);
+                    vMax0 = AdvSimd.Arm64.Max(vMax0, vMax2);
+                    chunkMax = AdvSimd.Arm64.MaxPairwiseScalar(vMax0).ToScalar();
+                }
+                else if (Avx.IsSupported && chunkLength >= 16)
+                {
+                    var vMax0 = Vector256.Create(double.NegativeInfinity);
+                    var vMax1 = Vector256.Create(double.NegativeInfinity);
+                    var vMax2 = Vector256.Create(double.NegativeInfinity);
+                    var vMax3 = Vector256.Create(double.NegativeInfinity);
+
+                    int vectorCount = chunkLength - (chunkLength % 16);
+
+                    for (; i < vectorCount; i += 16)
+                    {
+                        var v0 = Avx.LoadVector256(chunkPtr + i);
+                        var v1 = Avx.LoadVector256(chunkPtr + i + 4);
+                        var v2 = Avx.LoadVector256(chunkPtr + i + 8);
+                        var v3 = Avx.LoadVector256(chunkPtr + i + 12);
+
+                        vMax0 = Avx.Max(vMax0, v0);
+                        vMax1 = Avx.Max(vMax1, v1);
+                        vMax2 = Avx.Max(vMax2, v2);
+                        vMax3 = Avx.Max(vMax3, v3);
+                    }
+
+                    vMax0 = Avx.Max(vMax0, vMax1);
+                    vMax2 = Avx.Max(vMax2, vMax3);
+                    vMax0 = Avx.Max(vMax0, vMax2);
+                    chunkMax = Math.Max(Math.Max(vMax0.GetElement(0), vMax0.GetElement(1)),
+                                       Math.Max(vMax0.GetElement(2), vMax0.GetElement(3)));
+                }
+
+                for (; i < chunkLength; i++)
+                {
+                    var val = chunkPtr[i];
+                    if (val > chunkMax) chunkMax = val;
+                }
+
+                partialMaxs[chunkIndex] = chunkMax;
+            });
+        }
+
+        double max = double.NegativeInfinity;
+        for (int i = 0; i < numChunks; i++)
+        {
+            if (partialMaxs[i] > max) max = partialMaxs[i];
+        }
+
+        return max;
+    }
+
+    // ============================================================================
+    // Float32 Vectorized Helpers (4 floats per Vector128, 8 per Vector256)
+    // ============================================================================
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double SumVectorizedFloat32(ReadOnlySpan<float> span)
+    {
+        // Accumulate in double for precision, then return double
+        double sum = 0;
+        int i = 0;
+
+        ref float ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.IsSupported && span.Length >= 16)
+        {
+            // ARM NEON path (128-bit = 4 floats per vector)
+            // Use 4 accumulators for better instruction-level parallelism
+            var vSum0 = Vector128<float>.Zero;
+            var vSum1 = Vector128<float>.Zero;
+            var vSum2 = Vector128<float>.Zero;
+            var vSum3 = Vector128<float>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vSum0 = AdvSimd.Add(vSum0, v0);
+                vSum1 = AdvSimd.Add(vSum1, v1);
+                vSum2 = AdvSimd.Add(vSum2, v2);
+                vSum3 = AdvSimd.Add(vSum3, v3);
+            }
+
+            // Combine accumulators
+            vSum0 = AdvSimd.Add(vSum0, vSum1);
+            vSum2 = AdvSimd.Add(vSum2, vSum3);
+            vSum0 = AdvSimd.Add(vSum0, vSum2);
+
+            // Horizontal sum for float (pairwise twice, then final sum)
+            var pairwise1 = AdvSimd.Arm64.AddPairwise(vSum0, vSum0);
+            var pairwise2 = AdvSimd.Arm64.AddPairwise(pairwise1, pairwise1);
+            sum = pairwise2.GetElement(0);
+        }
+        else if (Avx.IsSupported && span.Length >= 32)
+        {
+            // x64 AVX path (256-bit = 8 floats per vector)
+            var vSum0 = Vector256<float>.Zero;
+            var vSum1 = Vector256<float>.Zero;
+            var vSum2 = Vector256<float>.Zero;
+            var vSum3 = Vector256<float>.Zero;
+
+            int vectorCount = span.Length - (span.Length % 32);
+
+            for (; i < vectorCount; i += 32)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 16));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 24));
+
+                vSum0 = Avx.Add(vSum0, v0);
+                vSum1 = Avx.Add(vSum1, v1);
+                vSum2 = Avx.Add(vSum2, v2);
+                vSum3 = Avx.Add(vSum3, v3);
+            }
+
+            // Combine accumulators
+            vSum0 = Avx.Add(vSum0, vSum1);
+            vSum2 = Avx.Add(vSum2, vSum3);
+            vSum0 = Avx.Add(vSum0, vSum2);
+
+            // Horizontal sum
+            for (int j = 0; j < 8; j++)
+                sum += vSum0.GetElement(j);
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<float>.Count)
+        {
+            // Fallback to portable SIMD
+            var vSum = Vector<float>.Zero;
+            var vectorCount = span.Length - (span.Length % Vector<float>.Count);
+
+            for (; i < vectorCount; i += Vector<float>.Count)
+            {
+                vSum += new Vector<float>(span.Slice(i));
+            }
+
+            for (int j = 0; j < Vector<float>.Count; j++)
+                sum += vSum[j];
+        }
+
+        // Scalar remainder (accumulate in double for precision)
+        for (; i < span.Length; i++)
+            sum += span[i];
+
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float MinVectorizedFloat32(ReadOnlySpan<float> span)
+    {
+        float min = float.PositiveInfinity;
+        int i = 0;
+
+        ref float ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.IsSupported && span.Length >= 16)
+        {
+            // ARM NEON path (128-bit = 4 floats per vector)
+            var vMin0 = Vector128.Create(float.PositiveInfinity);
+            var vMin1 = Vector128.Create(float.PositiveInfinity);
+            var vMin2 = Vector128.Create(float.PositiveInfinity);
+            var vMin3 = Vector128.Create(float.PositiveInfinity);
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vMin0 = AdvSimd.Min(vMin0, v0);
+                vMin1 = AdvSimd.Min(vMin1, v1);
+                vMin2 = AdvSimd.Min(vMin2, v2);
+                vMin3 = AdvSimd.Min(vMin3, v3);
+            }
+
+            // Combine accumulators
+            vMin0 = AdvSimd.Min(vMin0, vMin1);
+            vMin2 = AdvSimd.Min(vMin2, vMin3);
+            vMin0 = AdvSimd.Min(vMin0, vMin2);
+
+            // Horizontal min for float
+            var pairwise1 = AdvSimd.Arm64.MinPairwise(vMin0, vMin0);
+            var pairwise2 = AdvSimd.Arm64.MinPairwise(pairwise1, pairwise1);
+            min = pairwise2.GetElement(0);
+        }
+        else if (Avx.IsSupported && span.Length >= 32)
+        {
+            // x64 AVX path (256-bit = 8 floats per vector)
+            var vMin0 = Vector256.Create(float.PositiveInfinity);
+            var vMin1 = Vector256.Create(float.PositiveInfinity);
+            var vMin2 = Vector256.Create(float.PositiveInfinity);
+            var vMin3 = Vector256.Create(float.PositiveInfinity);
+
+            int vectorCount = span.Length - (span.Length % 32);
+
+            for (; i < vectorCount; i += 32)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 16));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 24));
+
+                vMin0 = Avx.Min(vMin0, v0);
+                vMin1 = Avx.Min(vMin1, v1);
+                vMin2 = Avx.Min(vMin2, v2);
+                vMin3 = Avx.Min(vMin3, v3);
+            }
+
+            // Combine accumulators
+            vMin0 = Avx.Min(vMin0, vMin1);
+            vMin2 = Avx.Min(vMin2, vMin3);
+            vMin0 = Avx.Min(vMin0, vMin2);
+
+            // Horizontal min
+            for (int j = 0; j < 8; j++)
+            {
+                if (vMin0.GetElement(j) < min) min = vMin0.GetElement(j);
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<float>.Count)
+        {
+            // Fallback to portable SIMD
+            var vMin = new Vector<float>(float.PositiveInfinity);
+            var vectorCount = span.Length - (span.Length % Vector<float>.Count);
+
+            for (; i < vectorCount; i += Vector<float>.Count)
+            {
+                vMin = Vector.Min(vMin, new Vector<float>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<float>.Count; j++)
+            {
+                if (vMin[j] < min) min = vMin[j];
+            }
+        }
+
+        // Scalar remainder
+        for (; i < span.Length; i++)
+        {
+            if (span[i] < min) min = span[i];
+        }
+
+        return min;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float MaxVectorizedFloat32(ReadOnlySpan<float> span)
+    {
+        float max = float.NegativeInfinity;
+        int i = 0;
+
+        ref float ptr = ref MemoryMarshal.GetReference(span);
+
+        if (AdvSimd.IsSupported && span.Length >= 16)
+        {
+            // ARM NEON path (128-bit = 4 floats per vector)
+            var vMax0 = Vector128.Create(float.NegativeInfinity);
+            var vMax1 = Vector128.Create(float.NegativeInfinity);
+            var vMax2 = Vector128.Create(float.NegativeInfinity);
+            var vMax3 = Vector128.Create(float.NegativeInfinity);
+
+            int vectorCount = span.Length - (span.Length % 16);
+
+            for (; i < vectorCount; i += 16)
+            {
+                var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+                var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+                vMax0 = AdvSimd.Max(vMax0, v0);
+                vMax1 = AdvSimd.Max(vMax1, v1);
+                vMax2 = AdvSimd.Max(vMax2, v2);
+                vMax3 = AdvSimd.Max(vMax3, v3);
+            }
+
+            // Combine accumulators
+            vMax0 = AdvSimd.Max(vMax0, vMax1);
+            vMax2 = AdvSimd.Max(vMax2, vMax3);
+            vMax0 = AdvSimd.Max(vMax0, vMax2);
+
+            // Horizontal max for float
+            var pairwise1 = AdvSimd.Arm64.MaxPairwise(vMax0, vMax0);
+            var pairwise2 = AdvSimd.Arm64.MaxPairwise(pairwise1, pairwise1);
+            max = pairwise2.GetElement(0);
+        }
+        else if (Avx.IsSupported && span.Length >= 32)
+        {
+            // x64 AVX path (256-bit = 8 floats per vector)
+            var vMax0 = Vector256.Create(float.NegativeInfinity);
+            var vMax1 = Vector256.Create(float.NegativeInfinity);
+            var vMax2 = Vector256.Create(float.NegativeInfinity);
+            var vMax3 = Vector256.Create(float.NegativeInfinity);
+
+            int vectorCount = span.Length - (span.Length % 32);
+
+            for (; i < vectorCount; i += 32)
+            {
+                var v0 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+                var v1 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+                var v2 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 16));
+                var v3 = Vector256.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 24));
+
+                vMax0 = Avx.Max(vMax0, v0);
+                vMax1 = Avx.Max(vMax1, v1);
+                vMax2 = Avx.Max(vMax2, v2);
+                vMax3 = Avx.Max(vMax3, v3);
+            }
+
+            // Combine accumulators
+            vMax0 = Avx.Max(vMax0, vMax1);
+            vMax2 = Avx.Max(vMax2, vMax3);
+            vMax0 = Avx.Max(vMax0, vMax2);
+
+            // Horizontal max
+            for (int j = 0; j < 8; j++)
+            {
+                if (vMax0.GetElement(j) > max) max = vMax0.GetElement(j);
+            }
+        }
+        else if (Vector.IsHardwareAccelerated && span.Length >= Vector<float>.Count)
+        {
+            // Fallback to portable SIMD
+            var vMax = new Vector<float>(float.NegativeInfinity);
+            var vectorCount = span.Length - (span.Length % Vector<float>.Count);
+
+            for (; i < vectorCount; i += Vector<float>.Count)
+            {
+                vMax = Vector.Max(vMax, new Vector<float>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<float>.Count; j++)
             {
                 if (vMax[j] > max) max = vMax[j];
             }
