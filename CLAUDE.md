@@ -74,7 +74,7 @@ polaire/
 - `MemoryPool.Memory<T>` property creates a copy (performance impact)
 - `VectorScalarOp` uses scalar fallback (SIMD optimization removed due to delegate comparison issue)
 - XML documentation incomplete (CS1591 warnings suppressed)
-- Min/Max aggregations not SIMD optimized (50-60x slower than Sum/Mean)
+- Std/Var aggregations not yet SIMD optimized
 
 ## Dependencies
 
@@ -178,11 +178,13 @@ var result = ScanCsv("large.csv")
 
 ## Benchmark Results (Apple M1 Max, .NET 8.0)
 
-### SIMD-Optimized Operations (excellent performance)
+### SIMD-Optimized Aggregations
 | Operation | 1K | 10K | 100K | 1M |
 |-----------|-----|------|------|------|
-| Sum | 511 ns | 4.8 µs | 48 µs | 489 µs |
-| Mean | 515 ns | 4.8 µs | 48 µs | 486 µs |
+| Sum | 511 ns | 4.8 µs | 48 µs | 482 µs |
+| Mean | 515 ns | 4.8 µs | 48 µs | 483 µs |
+| Min | 500 ns | 3.2 µs | 32 µs | 324 µs |
+| Max | 500 ns | 3.2 µs | 32 µs | 322 µs |
 | Addition | 6 µs | 56 µs | 691 µs | 6.7 ms |
 
 ### DataFrame Operations
@@ -195,13 +197,12 @@ var result = ScanCsv("large.csv")
 | Join | 318 µs | 5.4 ms | - |
 
 ### Known Performance Issues
-- Min/Max: 50-60x slower than Sum (not SIMD optimized)
-- Std/Var: Similar to Min/Max
+- Std/Var: Not yet SIMD optimized (~38ms for 1M rows)
 
 ## Next Steps / Roadmap
 
 1. **Performance Comparison with Polars** - Run equivalent benchmarks
-2. **SIMD for Min/Max** - Implement vectorized min/max
+2. **SIMD for Std/Var** - Implement vectorized standard deviation/variance
 3. **SQL Interface** - Use SqlParser to execute SQL queries
 4. **Window Functions** - Rolling aggregations, rank, etc.
 5. **More String Operations** - Regex, split, extract, etc.
