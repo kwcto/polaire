@@ -10,7 +10,7 @@ using Polaire.Core;
 using Polaire.DataTypes;
 using Polaire.Compute;
 
-namespace Polaire.Series;
+namespace Polaire;
 
 /// <summary>
 /// A named, typed column of data. The primary one-dimensional data structure in Polaire.
@@ -107,7 +107,7 @@ public sealed class Series : IEnumerable<AnyValue>
     public static Series FromValues(string name, DateOnly[] values)
     {
         var builder = new Date32Array.Builder();
-        foreach (var v in values) builder.Append(v.DayNumber);
+        foreach (var v in values) builder.Append(v.ToDateTime(TimeOnly.MinValue));
         return FromArrowArray(name, builder.Build(), DataType.Date);
     }
 
@@ -296,7 +296,7 @@ public sealed class Series : IEnumerable<AnyValue>
     }
 
     /// <summary>Returns value counts as a DataFrame.</summary>
-    public DataFrame.DataFrame ValueCounts()
+    public DataFrame ValueCounts()
     {
         return SeriesOperations.ValueCounts(this);
     }

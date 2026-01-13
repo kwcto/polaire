@@ -2,9 +2,9 @@
 // Polaire - High-performance DataFrame library for .NET
 
 using Polaire.DataTypes;
-using Polaire.DataFrame;
+
 using Polaire.Expressions;
-using Polaire.Series;
+
 
 namespace Polaire.LazyFrame;
 
@@ -22,7 +22,7 @@ public sealed class LazyFrame
         _plan = plan;
     }
 
-    internal LazyFrame(DataFrame.DataFrame df)
+    internal LazyFrame(DataFrame df)
     {
         _plan = new LogicalPlan.Scan(df);
     }
@@ -35,7 +35,7 @@ public sealed class LazyFrame
     // ============================================================================
 
     /// <summary>Creates a LazyFrame from a DataFrame.</summary>
-    public static LazyFrame From(DataFrame.DataFrame df) => new(df);
+    public static LazyFrame From(DataFrame df) => new(df);
 
     // ============================================================================
     // Transformation Operations
@@ -201,7 +201,7 @@ public sealed class LazyFrame
     // ============================================================================
 
     /// <summary>Executes the query and returns a DataFrame.</summary>
-    public DataFrame.DataFrame Collect()
+    public DataFrame Collect()
     {
         // Optimize the plan first
         var optimizedPlan = QueryOptimizer.Optimize(_plan);
@@ -211,7 +211,7 @@ public sealed class LazyFrame
     }
 
     /// <summary>Executes the query and returns first n rows.</summary>
-    public DataFrame.DataFrame Fetch(int n = 500)
+    public DataFrame Fetch(int n = 500)
     {
         return Head(n).Collect();
     }

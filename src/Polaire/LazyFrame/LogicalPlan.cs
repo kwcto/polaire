@@ -1,7 +1,7 @@
 // Licensed under the MIT License.
 // Polaire - High-performance DataFrame library for .NET
 
-using Polaire.DataFrame;
+
 using Polaire.Expressions;
 
 namespace Polaire.LazyFrame;
@@ -19,19 +19,19 @@ public abstract record LogicalPlan
     // ============================================================================
 
     /// <summary>Scan a materialized DataFrame.</summary>
-    public sealed record Scan(DataFrame.DataFrame Df) : LogicalPlan
+    public sealed record Scan(DataFrame Df) : LogicalPlan
     {
         public override string ToString() => $"Scan(rows={Df.Height}, cols={Df.Width})";
     }
 
     /// <summary>Scan with projection pushdown (only read needed columns).</summary>
-    public sealed record ScanWithProjection(DataFrame.DataFrame Df, string[] Columns) : LogicalPlan
+    public sealed record ScanWithProjection(DataFrame Df, string[] Columns) : LogicalPlan
     {
         public override string ToString() => $"Scan(cols=[{string.Join(", ", Columns)}])";
     }
 
     /// <summary>Scan with predicate pushdown (filter while reading).</summary>
-    public sealed record ScanWithPredicate(DataFrame.DataFrame Df, Expr Predicate) : LogicalPlan
+    public sealed record ScanWithPredicate(DataFrame Df, Expr Predicate) : LogicalPlan
     {
         public override string ToString() => $"Scan(predicate={Predicate})";
     }

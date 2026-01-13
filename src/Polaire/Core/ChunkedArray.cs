@@ -203,7 +203,7 @@ public sealed class ChunkedArray<T> : IChunkedArray, IEnumerable<T?> where T : s
             AppendChunkToBuilder(builder, chunk);
         }
 
-        return new ChunkedArray<T>(new[] { builder.Build() }, _dataType);
+        return new ChunkedArray<T>(new[] { builder.Build(default) }, _dataType);
     }
 
     private IArrowArrayBuilder<IArrowArray> CreateBuilder()

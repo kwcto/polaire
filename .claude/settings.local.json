@@ -7,7 +7,13 @@
       "Bash(git checkout -- .)",
       "Bash(find:*)",
       "Bash(./install.sh:*)",
-      "Bash(ralph --help:*)"
+      "Bash(ralph --help:*)",
+      "Bash(grep:*)",
+      "Bash(for:*)",
+      "Bash(do sed -i '' '1s/^/using Xunit;\\\\n/' \"$f\")",
+      "Bash(done)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: Resolve build errors and all 127 tests now pass\n\nBuild fixes:\n- Update SqlParser package 0.5.0 -> 1.0.2\n- Fix ''when'' keyword collision in pattern matching \\(C# contextual keyword\\)\n- Resolve namespace collisions by moving Series/DataFrame to root namespace\n- Add type aliases in Polaire.cs to avoid method/type shadowing\n- Create VectorBinaryOp delegate for Span generic type constraints\n- Fix type conversions \\(long->int casts, DateTime, Memory<T>\\)\n- Resolve Array ambiguity \\(Apache.Arrow vs System.Array\\)\n- Suppress CS1591 XML documentation warnings\n- Add missing ''using Xunit'' to test files\n\nBug fixes:\n- Fix AnyValue.InvalidCast error message \\(was showing expected twice\\)\n- Fix GroupBy aggregation type inference for aliased expressions\n\nAlso added:\n- Comprehensive README with examples and documentation\n- MIT LICENSE file\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

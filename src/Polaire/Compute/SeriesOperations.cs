@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 
@@ -300,7 +300,7 @@ public static class SeriesOperations
     // ValueCounts
     // ============================================================================
 
-    public static DataFrame.DataFrame ValueCounts(Series series)
+    public static DataFrame ValueCounts(Series series)
     {
         var counts = new Dictionary<AnyValue, int>();
 
@@ -325,7 +325,7 @@ public static class SeriesOperations
         var valuesSeries = BuildSeriesFromAnyValues(series.Name, valuesList, series.DataType);
         var countsSeries = Series.FromValues("count", countsList.ToArray());
 
-        return new DataFrame.DataFrame(new[] { valuesSeries, countsSeries });
+        return new DataFrame(new[] { valuesSeries, countsSeries });
     }
 
     private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
@@ -360,7 +360,7 @@ public static class SeriesOperations
     {
         var indices = Enumerable.Range(0, series.Length).ToArray();
 
-        Array.Sort(indices, (i, j) =>
+        System.Array.Sort(indices, (i, j) =>
         {
             bool iNull = series.IsNull(i);
             bool jNull = series.IsNull(j);

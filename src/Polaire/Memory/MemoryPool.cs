@@ -161,7 +161,7 @@ public readonly struct AlignedMemory<T> : IDisposable where T : unmanaged
     }
 
     public Span<T> Span => MemoryMarshal.Cast<byte, T>(_owner.Memory.Span.Slice(_offset))[.._count];
-    public Memory<T> Memory => MemoryMarshal.Cast<byte, T>(_owner.Memory.Slice(_offset)).Slice(0, _count);
+    public Memory<T> Memory => new Memory<T>(Span.ToArray());
     public int Length => _count;
 
     public void Dispose() => _owner.Dispose();

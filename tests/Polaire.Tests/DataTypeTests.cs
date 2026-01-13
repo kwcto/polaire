@@ -1,3 +1,4 @@
+using Xunit;
 // Licensed under the MIT License.
 // Polaire - High-performance DataFrame library for .NET
 

@@ -1,10 +1,10 @@
 // Licensed under the MIT License.
 // Polaire - High-performance DataFrame library for .NET
 
-using Polaire.DataFrame;
+
 using Polaire.Expressions;
 using Polaire.Compute;
-using Polaire.Series;
+
 
 namespace Polaire.LazyFrame;
 
@@ -14,7 +14,7 @@ namespace Polaire.LazyFrame;
 public static class PlanExecutor
 {
     /// <summary>Executes a logical plan.</summary>
-    public static DataFrame.DataFrame Execute(LogicalPlan plan)
+    public static DataFrame Execute(LogicalPlan plan)
     {
         return plan switch
         {
@@ -44,12 +44,12 @@ public static class PlanExecutor
     // Scan Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteScanWithProjection(LogicalPlan.ScanWithProjection plan)
+    private static DataFrame ExecuteScanWithProjection(LogicalPlan.ScanWithProjection plan)
     {
         return plan.Df.Select(plan.Columns);
     }
 
-    private static DataFrame.DataFrame ExecuteScanWithPredicate(LogicalPlan.ScanWithPredicate plan)
+    private static DataFrame ExecuteScanWithPredicate(LogicalPlan.ScanWithPredicate plan)
     {
         var mask = ExprEvaluator.Evaluate(plan.Predicate, plan.Df);
         return plan.Df.Filter(mask);
@@ -59,14 +59,14 @@ public static class PlanExecutor
     // Projection Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteSelect(LogicalPlan.Select plan)
+    private static DataFrame ExecuteSelect(LogicalPlan.Select plan)
     {
         var input = Execute(plan.Input);
         var resultColumns = ExprEvaluator.Evaluate(plan.Exprs, input);
-        return new DataFrame.DataFrame(resultColumns);
+        return new DataFrame(resultColumns);
     }
 
-    private static DataFrame.DataFrame ExecuteWithColumns(LogicalPlan.WithColumns plan)
+    private static DataFrame ExecuteWithColumns(LogicalPlan.WithColumns plan)
     {
         var input = Execute(plan.Input);
         var result = input;
@@ -80,13 +80,13 @@ public static class PlanExecutor
         return result;
     }
 
-    private static DataFrame.DataFrame ExecuteDrop(LogicalPlan.Drop plan)
+    private static DataFrame ExecuteDrop(LogicalPlan.Drop plan)
     {
         var input = Execute(plan.Input);
         return input.Drop(plan.Columns);
     }
 
-    private static DataFrame.DataFrame ExecuteRename(LogicalPlan.Rename plan)
+    private static DataFrame ExecuteRename(LogicalPlan.Rename plan)
     {
         var input = Execute(plan.Input);
         return input.Rename(plan.Mapping);
@@ -96,32 +96,32 @@ public static class PlanExecutor
     // Selection Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteFilter(LogicalPlan.Filter plan)
+    private static DataFrame ExecuteFilter(LogicalPlan.Filter plan)
     {
         var input = Execute(plan.Input);
         var mask = ExprEvaluator.Evaluate(plan.Predicate, input);
         return input.Filter(mask);
     }
 
-    private static DataFrame.DataFrame ExecuteLimit(LogicalPlan.Limit plan)
+    private static DataFrame ExecuteLimit(LogicalPlan.Limit plan)
     {
         var input = Execute(plan.Input);
         return input.Head(plan.N);
     }
 
-    private static DataFrame.DataFrame ExecuteTail(LogicalPlan.Tail plan)
+    private static DataFrame ExecuteTail(LogicalPlan.Tail plan)
     {
         var input = Execute(plan.Input);
         return input.Tail(plan.N);
     }
 
-    private static DataFrame.DataFrame ExecuteSlice(LogicalPlan.Slice plan)
+    private static DataFrame ExecuteSlice(LogicalPlan.Slice plan)
     {
         var input = Execute(plan.Input);
         return input.Slice(plan.Offset, plan.Length);
     }
 
-    private static DataFrame.DataFrame ExecuteDistinct(LogicalPlan.Distinct plan)
+    private static DataFrame ExecuteDistinct(LogicalPlan.Distinct plan)
     {
         var input = Execute(plan.Input);
         return plan.Subset is null ? input.Unique() : input.Unique(plan.Subset);
@@ -131,7 +131,7 @@ public static class PlanExecutor
     // Ordering Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteSort(LogicalPlan.Sort plan)
+    private static DataFrame ExecuteSort(LogicalPlan.Sort plan)
     {
         var input = Execute(plan.Input);
 
@@ -167,7 +167,7 @@ public static class PlanExecutor
     // Aggregation Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteAggregate(LogicalPlan.Aggregate plan)
+    private static DataFrame ExecuteAggregate(LogicalPlan.Aggregate plan)
     {
         var input = Execute(plan.Input);
 
@@ -187,31 +187,31 @@ public static class PlanExecutor
         }
 
         // Build aggregation specifications
-        var aggSpecs = new List<(string column, string aggName, Func<Series.Series, AnyValue> agg)>();
+        var aggSpecs = new List<(string column, string aggName, Func<Series, AnyValue> agg, string? alias)>();
 
         foreach (var expr in plan.Aggs)
         {
-            var (colName, aggName, aggFunc) = ExtractAggSpec(expr);
-            aggSpecs.Add((colName, aggName, aggFunc));
+            var (colName, aggName, aggFunc, alias) = ExtractAggSpec(expr);
+            aggSpecs.Add((colName, aggName, aggFunc, alias));
         }
 
         return groupBy.Agg(aggSpecs.ToArray());
     }
 
-    private static (string column, string aggName, Func<Series.Series, AnyValue> agg) ExtractAggSpec(Expr expr)
+    private static (string column, string aggName, Func<Series, AnyValue> agg, string? alias) ExtractAggSpec(Expr expr)
     {
         return expr switch
         {
             Expr.Agg { Type: var aggType, Inner: Expr.Column col } =>
-                (col.Name, aggType.ToString().ToLower(), GetAggFunction(aggType)),
+                (col.Name, aggType.ToString().ToLower(), GetAggFunction(aggType), null),
             Expr.Alias { Inner: Expr.Agg { Type: var aggType, Inner: Expr.Column col }, Name: var name } =>
-                (col.Name, name, GetAggFunction(aggType)),
-            Expr.Function { Name: "count" } => ("*", "count", s => AnyValue.From(s.Count())),
+                (col.Name, aggType.ToString().ToLower(), GetAggFunction(aggType), name),
+            Expr.Function { Name: "count" } => ("*", "count", s => AnyValue.From(s.Count()), null),
             _ => throw new NotSupportedException($"Cannot extract aggregation from {expr}")
         };
     }
 
-    private static Func<Series.Series, AnyValue> GetAggFunction(AggregationType aggType) => aggType switch
+    private static Func<Series, AnyValue> GetAggFunction(AggregationType aggType) => aggType switch
     {
         AggregationType.Sum => s => s.Sum(),
         AggregationType.Mean => s => s.Mean(),
@@ -231,7 +231,7 @@ public static class PlanExecutor
     // Join Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteJoin(LogicalPlan.Join plan)
+    private static DataFrame ExecuteJoin(LogicalPlan.Join plan)
     {
         var left = Execute(plan.Left);
         var right = Execute(plan.Right);
@@ -255,18 +255,18 @@ public static class PlanExecutor
     // Set Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteUnion(LogicalPlan.Union plan)
+    private static DataFrame ExecuteUnion(LogicalPlan.Union plan)
     {
         var left = Execute(plan.Left);
         var right = Execute(plan.Right);
-        return DataFrame.DataFrame.VConcat(left, right);
+        return DataFrame.VConcat(left, right);
     }
 
     // ============================================================================
     // Reshaping Operations
     // ============================================================================
 
-    private static DataFrame.DataFrame ExecuteExplode(LogicalPlan.Explode plan)
+    private static DataFrame ExecuteExplode(LogicalPlan.Explode plan)
     {
         var input = Execute(plan.Input);
         // TODO: Implement list explosion

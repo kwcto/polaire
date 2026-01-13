@@ -5,7 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 

@@ -2,10 +2,10 @@
 // Polaire - High-performance DataFrame library for .NET
 
 using Polaire.DataTypes;
-using Polaire.Series;
+
 using Polaire.Compute;
 
-namespace Polaire.DataFrame;
+namespace Polaire;
 
 /// <summary>
 /// Represents a grouped DataFrame for aggregation operations.
@@ -121,9 +121,9 @@ public sealed class GroupBy
     }
 
     /// <summary>Applies custom aggregation.</summary>
-    public DataFrame Agg(params (string column, string aggName, Func<Series.Series, AnyValue> agg)[] aggregations)
+    public DataFrame Agg(params (string column, string aggName, Func<Series, AnyValue> agg, string? alias)[] aggregations)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
 
         // Group key columns
         foreach (var groupCol in _groupColumns)
@@ -138,7 +138,7 @@ public sealed class GroupBy
         }
 
         // Aggregated columns
-        foreach (var (column, aggName, agg) in aggregations)
+        foreach (var (column, aggName, agg, alias) in aggregations)
         {
             var values = new List<AnyValue>();
             var sourceCol = _df[column];
@@ -150,7 +150,7 @@ public sealed class GroupBy
                 values.Add(agg(groupSeries));
             }
 
-            var resultName = $"{column}_{aggName}";
+            var resultName = alias ?? $"{column}_{aggName}";
             resultColumns.Add(BuildSeriesFromAnyValues(resultName, values, InferResultType(sourceCol.DataType, aggName)));
         }
 
@@ -160,7 +160,7 @@ public sealed class GroupBy
     /// <summary>Applies multiple aggregations.</summary>
     public DataFrame Agg(Dictionary<string, List<string>> columnAggs)
     {
-        var aggregations = new List<(string, string, Func<Series.Series, AnyValue>)>();
+        var aggregations = new List<(string, string, Func<Series, AnyValue>, string?)>();
 
         foreach (var kvp in columnAggs)
         {
@@ -168,14 +168,14 @@ public sealed class GroupBy
             foreach (var aggName in kvp.Value)
             {
                 var agg = GetAggregation(aggName);
-                aggregations.Add((column, aggName, agg));
+                aggregations.Add((column, aggName, agg, null));
             }
         }
 
         return Agg(aggregations.ToArray());
     }
 
-    private Func<Series.Series, AnyValue> GetAggregation(string name) => name.ToLower() switch
+    private Func<Series, AnyValue> GetAggregation(string name) => name.ToLower() switch
     {
         "count" => s => AnyValue.From(s.Count()),
         "sum" => s => s.Sum(),
@@ -195,9 +195,9 @@ public sealed class GroupBy
     // Helpers
     // ============================================================================
 
-    private DataFrame Aggregate(string aggName, Func<Series.Series, AnyValue> agg)
+    private DataFrame Aggregate(string aggName, Func<Series, AnyValue> agg)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
 
         // Group key columns
         foreach (var groupCol in _groupColumns)
@@ -232,9 +232,9 @@ public sealed class GroupBy
         return new DataFrame(resultColumns);
     }
 
-    private DataFrame AggregateNumeric(string aggName, Func<Series.Series, AnyValue> agg)
+    private DataFrame AggregateNumeric(string aggName, Func<Series, AnyValue> agg)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
 
         // Group key columns
         foreach (var groupCol in _groupColumns)
@@ -281,23 +281,23 @@ public sealed class GroupBy
         _ => sourceType
     };
 
-    private static Series.Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
+    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
     {
         return dtype switch
         {
-            DataType.Int32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
-            DataType.Float64Type => Series.Series.FromNullable(name, values.Select(v =>
+            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
+            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
+            DataType.Float32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
+            DataType.Float64Type => Series.FromNullable(name, values.Select(v =>
             {
                 if (v.IsNull) return null;
                 if (v.TryGetDouble(out var d)) return (double?)d;
                 if (v.TryGetInt64(out var l)) return (double?)l;
                 return null;
             }).ToArray()),
-            DataType.BooleanType => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
+            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
+            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
+            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
     }
 

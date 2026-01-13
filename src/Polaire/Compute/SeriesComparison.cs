@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 
@@ -22,13 +22,13 @@ public static class SeriesComparison
     public static Series Equal(Series left, Series right)
     {
         ValidateShapes(left, right);
-        return CompareOp(left, right, "eq", (a, b) => a == b, (a, b) => a == b, (a, b) => a.Equals(b, StringComparison.Ordinal));
+        return CompareOp(left, right, "eq", (a, b) => a == b, (a, b) => a == b, (a, b) => string.Equals(a, b, StringComparison.Ordinal));
     }
 
     public static Series NotEqual(Series left, Series right)
     {
         ValidateShapes(left, right);
-        return CompareOp(left, right, "ne", (a, b) => a != b, (a, b) => a != b, (a, b) => !a.Equals(b, StringComparison.Ordinal));
+        return CompareOp(left, right, "ne", (a, b) => a != b, (a, b) => a != b, (a, b) => !string.Equals(a, b, StringComparison.Ordinal));
     }
 
     public static Series LessThan(Series left, Series right)

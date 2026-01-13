@@ -3,7 +3,7 @@
 
 using System.Linq.Expressions;
 using Polaire.DataTypes;
-using Polaire.Series;
+
 
 namespace Polaire.Expressions;
 

@@ -9,9 +9,14 @@ using System.Runtime.Intrinsics.X86;
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
+
+/// <summary>
+/// Delegate for SIMD vector binary operations on double arrays.
+/// </summary>
+public delegate void VectorBinaryOp(ReadOnlySpan<double> left, ReadOnlySpan<double> right, Span<double> result);
 
 /// <summary>
 /// SIMD-optimized arithmetic operations for Series.
@@ -96,7 +101,7 @@ public static class SeriesArithmetic
         Series left, Series right, string opName,
         Func<long, long, long> int64Op,
         Func<double, double, double> float64Op,
-        Action<ReadOnlySpan<double>, ReadOnlySpan<double>, Span<double>>? vectorOp)
+        VectorBinaryOp? vectorOp)
     {
         // Promote to common type
         var (promotedLeft, promotedRight, resultType) = PromoteTypes(left, right);
@@ -138,7 +143,7 @@ public static class SeriesArithmetic
     private static Series BinaryOpFloat64(
         Series left, Series right, string opName,
         Func<double, double, double> scalarOp,
-        Action<ReadOnlySpan<double>, ReadOnlySpan<double>, Span<double>>? vectorOp)
+        VectorBinaryOp? vectorOp)
     {
         var leftData = left.Data as ChunkedArray<double>;
         var rightData = right.Data as ChunkedArray<double>;
@@ -365,40 +370,7 @@ public static class SeriesArithmetic
 
     private static void VectorScalarOp(ReadOnlySpan<double> data, double scalar, DoubleArray.Builder builder, Func<double, double, double> op)
     {
-        if (Vector.IsHardwareAccelerated && data.Length >= Vector<double>.Count)
-        {
-            var scalarVec = new Vector<double>(scalar);
-            var result = new double[data.Length];
-            int i = 0;
-
-            var vectorCount = data.Length - (data.Length % Vector<double>.Count);
-            for (; i < vectorCount; i += Vector<double>.Count)
-            {
-                var vData = new Vector<double>(data.Slice(i));
-                // Determine operation from delegate
-                Vector<double> vResult;
-                if (op == ((a, b) => a + b)) vResult = vData + scalarVec;
-                else if (op == ((a, b) => a - b)) vResult = vData - scalarVec;
-                else if (op == ((a, b) => a * b)) vResult = vData * scalarVec;
-                else if (op == ((a, b) => a / b)) vResult = vData / scalarVec;
-                else
-                {
-                    // Fallback to scalar
-                    for (int j = 0; j < Vector<double>.Count; j++)
-                        result[i + j] = op(data[i + j], scalar);
-                    continue;
-                }
-                vResult.CopyTo(result.AsSpan(i));
-            }
-
-            for (; i < data.Length; i++)
-            {
-                result[i] = op(data[i], scalar);
-            }
-
-            builder.AppendRange(result);
-        }
-        else
+        // Use scalar operations for simplicity (SIMD optimization is used for binary ops)
         {
             for (int i = 0; i < data.Length; i++)
             {

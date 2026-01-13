@@ -385,11 +385,11 @@ public static class QueryOptimizer
                 foreach (var arg in func.Args)
                     CollectColumns(arg, columns);
                 break;
-            case Expr.When when:
-                CollectColumns(when.Condition, columns);
-                CollectColumns(when.ThenExpr, columns);
-                if (when.OtherwiseExpr is not null)
-                    CollectColumns(when.OtherwiseExpr, columns);
+            case Expr.When whenExpr:
+                CollectColumns(whenExpr.Condition, columns);
+                CollectColumns(whenExpr.ThenExpr, columns);
+                if (whenExpr.OtherwiseExpr is not null)
+                    CollectColumns(whenExpr.OtherwiseExpr, columns);
                 break;
             case Expr.Sort sort:
                 CollectColumns(sort.Inner, columns);

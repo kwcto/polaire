@@ -2,9 +2,9 @@
 // Polaire - High-performance DataFrame library for .NET
 
 using Polaire.DataTypes;
-using Polaire.Series;
+
 using Polaire.Compute;
-using Polaire.DataFrame;
+
 
 namespace Polaire.Expressions;
 
@@ -14,7 +14,7 @@ namespace Polaire.Expressions;
 public static class ExprEvaluator
 {
     /// <summary>Evaluates an expression against a DataFrame.</summary>
-    public static Series.Series Evaluate(Expr expr, DataFrame.DataFrame df)
+    public static Series Evaluate(Expr expr, DataFrame df)
     {
         return expr switch
         {
@@ -28,7 +28,7 @@ public static class ExprEvaluator
             Expr.IsNull isNull => EvaluateIsNull(isNull, df),
             Expr.IsNotNull isNotNull => EvaluateIsNotNull(isNotNull, df),
             Expr.FillNull fillNull => EvaluateFillNull(fillNull, df),
-            Expr.When when => EvaluateWhen(when, df),
+            Expr.When whenExpr => EvaluateWhen(whenExpr, df),
             Expr.Function func => EvaluateFunction(func, df),
             Expr.Sort sort => EvaluateSort(sort, df),
             Expr.Str str => EvaluateStr(str, df),
@@ -40,7 +40,7 @@ public static class ExprEvaluator
     }
 
     /// <summary>Evaluates multiple expressions.</summary>
-    public static Series.Series[] Evaluate(IEnumerable<Expr> exprs, DataFrame.DataFrame df)
+    public static Series[] Evaluate(IEnumerable<Expr> exprs, DataFrame df)
     {
         return exprs.Select(e => Evaluate(e, df)).ToArray();
     }
@@ -49,7 +49,7 @@ public static class ExprEvaluator
     // Column
     // ============================================================================
 
-    private static Series.Series EvaluateColumn(Expr.Column col, DataFrame.DataFrame df)
+    private static Series EvaluateColumn(Expr.Column col, DataFrame df)
     {
         if (!df.Columns.Contains(col.Name))
             throw new KeyNotFoundException($"Column '{col.Name}' not found in DataFrame");
@@ -60,30 +60,30 @@ public static class ExprEvaluator
     // Literal
     // ============================================================================
 
-    private static Series.Series EvaluateLiteral(Expr.Literal lit, int length)
+    private static Series EvaluateLiteral(Expr.Literal lit, int length)
     {
         return lit.Value.Kind switch
         {
             AnyValueKind.Null => CreateNullSeries("literal", length, lit.ExplicitType ?? DataType.Null),
-            AnyValueKind.Int32 => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsInt32(), length).ToArray()),
-            AnyValueKind.Int64 => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsInt64(), length).ToArray()),
-            AnyValueKind.Float32 => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsFloat32(), length).ToArray()),
-            AnyValueKind.Float64 => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsFloat64(), length).ToArray()),
-            AnyValueKind.Boolean => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsBoolean(), length).ToArray()),
-            AnyValueKind.String => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsString(), length).ToArray()),
-            _ => Series.Series.FromValues("literal", Enumerable.Repeat(lit.Value.ToString(), length).ToArray())
+            AnyValueKind.Int32 => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsInt32(), length).ToArray()),
+            AnyValueKind.Int64 => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsInt64(), length).ToArray()),
+            AnyValueKind.Float32 => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsFloat32(), length).ToArray()),
+            AnyValueKind.Float64 => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsFloat64(), length).ToArray()),
+            AnyValueKind.Boolean => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsBoolean(), length).ToArray()),
+            AnyValueKind.String => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsString(), length).ToArray()),
+            _ => Series.FromValues("literal", Enumerable.Repeat(lit.Value.ToString(), length).ToArray())
         };
     }
 
-    private static Series.Series CreateNullSeries(string name, int length, DataType type)
+    private static Series CreateNullSeries(string name, int length, DataType type)
     {
         return type switch
         {
-            DataType.Int32Type => Series.Series.FromNullable<int>(name, new int?[length]),
-            DataType.Int64Type => Series.Series.FromNullable<long>(name, new long?[length]),
-            DataType.Float64Type => Series.Series.FromNullable<double>(name, new double?[length]),
-            DataType.BooleanType => Series.Series.FromNullable<bool>(name, new bool?[length]),
-            _ => Series.Series.FromValues(name, new string?[length])
+            DataType.Int32Type => Series.FromNullable<int>(name, new int?[length]),
+            DataType.Int64Type => Series.FromNullable<long>(name, new long?[length]),
+            DataType.Float64Type => Series.FromNullable<double>(name, new double?[length]),
+            DataType.BooleanType => Series.FromNullable<bool>(name, new bool?[length]),
+            _ => Series.FromValues(name, new string?[length])
         };
     }
 
@@ -91,7 +91,7 @@ public static class ExprEvaluator
     // Alias
     // ============================================================================
 
-    private static Series.Series EvaluateAlias(Expr.Alias alias, DataFrame.DataFrame df)
+    private static Series EvaluateAlias(Expr.Alias alias, DataFrame df)
     {
         var inner = Evaluate(alias.Inner, df);
         return inner.Rename(alias.Name);
@@ -101,7 +101,7 @@ public static class ExprEvaluator
     // Binary Operations
     // ============================================================================
 
-    private static Series.Series EvaluateBinaryOp(Expr.BinaryOp binop, DataFrame.DataFrame df)
+    private static Series EvaluateBinaryOp(Expr.BinaryOp binop, DataFrame df)
     {
         var left = Evaluate(binop.Left, df);
         var right = Evaluate(binop.Right, df);
@@ -136,7 +136,7 @@ public static class ExprEvaluator
     // Unary Operations
     // ============================================================================
 
-    private static Series.Series EvaluateUnaryOp(Expr.UnaryOp unop, DataFrame.DataFrame df)
+    private static Series EvaluateUnaryOp(Expr.UnaryOp unop, DataFrame df)
     {
         var inner = Evaluate(unop.Inner, df);
 
@@ -152,7 +152,7 @@ public static class ExprEvaluator
     // Aggregations
     // ============================================================================
 
-    private static Series.Series EvaluateAgg(Expr.Agg agg, DataFrame.DataFrame df)
+    private static Series EvaluateAgg(Expr.Agg agg, DataFrame df)
     {
         var inner = Evaluate(agg.Inner, df);
 
@@ -176,19 +176,19 @@ public static class ExprEvaluator
         return CreateSeriesFromAnyValue(inner.Name, result);
     }
 
-    private static Series.Series CreateSeriesFromAnyValue(string name, AnyValue value)
+    private static Series CreateSeriesFromAnyValue(string name, AnyValue value)
     {
         return value.Kind switch
         {
-            AnyValueKind.Int32 => Series.Series.FromValues(name, new[] { value.AsInt32() }),
-            AnyValueKind.Int64 => Series.Series.FromValues(name, new[] { value.AsInt64() }),
-            AnyValueKind.Float32 => Series.Series.FromValues(name, new[] { value.AsFloat32() }),
+            AnyValueKind.Int32 => Series.FromValues(name, new[] { value.AsInt32() }),
+            AnyValueKind.Int64 => Series.FromValues(name, new[] { value.AsInt64() }),
+            AnyValueKind.Float32 => Series.FromValues(name, new[] { value.AsFloat32() }),
             AnyValueKind.Float64 or AnyValueKind.Null when value.TryGetDouble(out var d) =>
-                Series.Series.FromValues(name, new[] { d }),
-            AnyValueKind.Boolean => Series.Series.FromValues(name, new[] { value.AsBoolean() }),
-            AnyValueKind.String => Series.Series.FromValues(name, new[] { value.AsString() }),
-            AnyValueKind.Null => Series.Series.FromNullable<double>(name, new double?[] { null }),
-            _ => Series.Series.FromValues(name, new[] { value.ToString() })
+                Series.FromValues(name, new[] { d }),
+            AnyValueKind.Boolean => Series.FromValues(name, new[] { value.AsBoolean() }),
+            AnyValueKind.String => Series.FromValues(name, new[] { value.AsString() }),
+            AnyValueKind.Null => Series.FromNullable<double>(name, new double?[] { null }),
+            _ => Series.FromValues(name, new[] { value.ToString() })
         };
     }
 
@@ -196,7 +196,7 @@ public static class ExprEvaluator
     // Cast
     // ============================================================================
 
-    private static Series.Series EvaluateCast(Expr.Cast cast, DataFrame.DataFrame df)
+    private static Series EvaluateCast(Expr.Cast cast, DataFrame df)
     {
         var inner = Evaluate(cast.Inner, df);
         return inner.Cast(cast.TargetType);
@@ -206,13 +206,13 @@ public static class ExprEvaluator
     // Null Checks
     // ============================================================================
 
-    private static Series.Series EvaluateIsNull(Expr.IsNull isNull, DataFrame.DataFrame df)
+    private static Series EvaluateIsNull(Expr.IsNull isNull, DataFrame df)
     {
         var inner = Evaluate(isNull.Inner, df);
         return inner.IsNull();
     }
 
-    private static Series.Series EvaluateIsNotNull(Expr.IsNotNull isNotNull, DataFrame.DataFrame df)
+    private static Series EvaluateIsNotNull(Expr.IsNotNull isNotNull, DataFrame df)
     {
         var inner = Evaluate(isNotNull.Inner, df);
         return inner.IsNotNull();
@@ -222,7 +222,7 @@ public static class ExprEvaluator
     // FillNull
     // ============================================================================
 
-    private static Series.Series EvaluateFillNull(Expr.FillNull fillNull, DataFrame.DataFrame df)
+    private static Series EvaluateFillNull(Expr.FillNull fillNull, DataFrame df)
     {
         var inner = Evaluate(fillNull.Inner, df);
         var fill = Evaluate(fillNull.Fill, df);
@@ -241,7 +241,7 @@ public static class ExprEvaluator
     // When/Then/Otherwise
     // ============================================================================
 
-    private static Series.Series EvaluateWhen(Expr.When when, DataFrame.DataFrame df)
+    private static Series EvaluateWhen(Expr.When when, DataFrame df)
     {
         var condition = Evaluate(when.Condition, df);
         var thenResult = Evaluate(when.ThenExpr, df);
@@ -274,19 +274,19 @@ public static class ExprEvaluator
     // Function
     // ============================================================================
 
-    private static Series.Series EvaluateFunction(Expr.Function func, DataFrame.DataFrame df)
+    private static Series EvaluateFunction(Expr.Function func, DataFrame df)
     {
         return func.Name.ToLower() switch
         {
-            "count" => Series.Series.FromValues("count", new[] { df.Height }),
-            "row_number" => Series.Series.FromValues("row_number", Enumerable.Range(0, df.Height).ToArray()),
+            "count" => Series.FromValues("count", new[] { df.Height }),
+            "row_number" => Series.FromValues("row_number", Enumerable.Range(0, df.Height).ToArray()),
             "arange" when func.Args.Count >= 2 =>
                 EvaluateArange(func.Args[0], func.Args[1], func.Args.Count > 2 ? func.Args[2] : null, df),
             _ => throw new NotSupportedException($"Function not supported: {func.Name}")
         };
     }
 
-    private static Series.Series EvaluateArange(Expr start, Expr end, Expr? step, DataFrame.DataFrame df)
+    private static Series EvaluateArange(Expr start, Expr end, Expr? step, DataFrame df)
     {
         var startVal = Evaluate(start, df)[0].AsInt32();
         var endVal = Evaluate(end, df)[0].AsInt32();
@@ -298,14 +298,14 @@ public static class ExprEvaluator
             values.Add(i);
         }
 
-        return Series.Series.FromValues("arange", values.ToArray());
+        return Series.FromValues("arange", values.ToArray());
     }
 
     // ============================================================================
     // Sort
     // ============================================================================
 
-    private static Series.Series EvaluateSort(Expr.Sort sort, DataFrame.DataFrame df)
+    private static Series EvaluateSort(Expr.Sort sort, DataFrame df)
     {
         var inner = Evaluate(sort.Inner, df);
         return inner.Sort(sort.Descending, sort.NullsLast);
@@ -315,7 +315,7 @@ public static class ExprEvaluator
     // String Operations
     // ============================================================================
 
-    private static Series.Series EvaluateStr(Expr.Str str, DataFrame.DataFrame df)
+    private static Series EvaluateStr(Expr.Str str, DataFrame df)
     {
         var inner = Evaluate(str.Inner, df);
         var strOps = inner.Str;
@@ -340,7 +340,7 @@ public static class ExprEvaluator
     // DateTime Operations
     // ============================================================================
 
-    private static Series.Series EvaluateDt(Expr.Dt dt, DataFrame.DataFrame df)
+    private static Series EvaluateDt(Expr.Dt dt, DataFrame df)
     {
         var inner = Evaluate(dt.Inner, df);
         var dtOps = inner.Dt;
@@ -365,7 +365,7 @@ public static class ExprEvaluator
     // IsIn
     // ============================================================================
 
-    private static Series.Series EvaluateIsIn(Expr.IsIn isIn, DataFrame.DataFrame df)
+    private static Series EvaluateIsIn(Expr.IsIn isIn, DataFrame df)
     {
         var inner = Evaluate(isIn.Inner, df);
         return inner.IsIn(isIn.Values.ToArray());
@@ -375,7 +375,7 @@ public static class ExprEvaluator
     // Between
     // ============================================================================
 
-    private static Series.Series EvaluateBetween(Expr.Between between, DataFrame.DataFrame df)
+    private static Series EvaluateBetween(Expr.Between between, DataFrame df)
     {
         var inner = Evaluate(between.Inner, df);
         var lower = Evaluate(between.Lower, df)[0];
@@ -387,23 +387,23 @@ public static class ExprEvaluator
     // Helpers
     // ============================================================================
 
-    private static Series.Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
+    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
     {
         return dtype switch
         {
-            DataType.Int32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
-            DataType.Float64Type => Series.Series.FromNullable(name, values.Select(v =>
+            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
+            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
+            DataType.Float32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
+            DataType.Float64Type => Series.FromNullable(name, values.Select(v =>
             {
                 if (v.IsNull) return null;
                 if (v.TryGetDouble(out var d)) return (double?)d;
                 if (v.TryGetInt64(out var l)) return (double?)l;
                 return null;
             }).ToArray()),
-            DataType.BooleanType => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
+            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
+            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
+            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
     }
 }

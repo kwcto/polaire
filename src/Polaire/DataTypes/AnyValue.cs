@@ -419,8 +419,8 @@ public readonly struct AnyValue : IEquatable<AnyValue>, IComparable<AnyValue>
     public static implicit operator AnyValue(DateTime value) => From(value);
     public static implicit operator AnyValue(TimeSpan value) => From(value);
 
-    private static InvalidCastException InvalidCast(AnyValueKind expected) =>
-        new($"Expected {expected} but got {expected}");
+    private InvalidCastException InvalidCast(AnyValueKind expected) =>
+        new($"Expected {expected} but got {_kind}");
 }
 
 /// <summary>

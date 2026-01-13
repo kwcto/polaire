@@ -4,26 +4,26 @@
 using System.Collections;
 using System.Text;
 using Polaire.DataTypes;
-using Polaire.Series;
+
 using Polaire.Compute;
 
-namespace Polaire.DataFrame;
+namespace Polaire;
 
 /// <summary>
 /// A two-dimensional tabular data structure with labeled columns.
 /// The primary data structure in Polaire, equivalent to a SQL table or spreadsheet.
 /// </summary>
-public sealed class DataFrame : IEnumerable<Series.Series>
+public sealed class DataFrame : IEnumerable<Series>
 {
     private readonly Dictionary<string, int> _columnIndex;
-    private readonly Series.Series[] _columns;
+    private readonly Series[] _columns;
     private readonly int _height;
 
     // ============================================================================
     // Constructors
     // ============================================================================
 
-    public DataFrame(IEnumerable<Series.Series> columns)
+    public DataFrame(IEnumerable<Series> columns)
     {
         _columns = columns.ToArray();
 
@@ -49,7 +49,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         }
     }
 
-    public DataFrame(params Series.Series[] columns) : this((IEnumerable<Series.Series>)columns)
+    public DataFrame(params Series[] columns) : this((IEnumerable<Series>)columns)
     {
     }
 
@@ -64,23 +64,23 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         return new DataFrame(columns);
     }
 
-    private static Series.Series CreateEmptySeries(string name, DataType type)
+    private static Series CreateEmptySeries(string name, DataType type)
     {
         return type switch
         {
-            DataType.Int32Type => Series.Series.FromValues(name, Array.Empty<int>()),
-            DataType.Int64Type => Series.Series.FromValues(name, Array.Empty<long>()),
-            DataType.Float64Type => Series.Series.FromValues(name, Array.Empty<double>()),
-            DataType.StringType => Series.Series.FromValues(name, Array.Empty<string?>()),
-            DataType.BooleanType => Series.Series.FromValues(name, Array.Empty<bool>()),
-            _ => Series.Series.FromValues(name, Array.Empty<int>())
+            DataType.Int32Type => Series.FromValues(name, Array.Empty<int>()),
+            DataType.Int64Type => Series.FromValues(name, Array.Empty<long>()),
+            DataType.Float64Type => Series.FromValues(name, Array.Empty<double>()),
+            DataType.StringType => Series.FromValues(name, Array.Empty<string?>()),
+            DataType.BooleanType => Series.FromValues(name, Array.Empty<bool>()),
+            _ => Series.FromValues(name, Array.Empty<int>())
         };
     }
 
     /// <summary>Creates a DataFrame from a dictionary of column name -> values.</summary>
     public static DataFrame FromDictionary(Dictionary<string, object[]> data)
     {
-        var columns = new List<Series.Series>();
+        var columns = new List<Series>();
         int? expectedLength = null;
 
         foreach (var kvp in data)
@@ -96,26 +96,26 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         return new DataFrame(columns);
     }
 
-    private static Series.Series CreateSeriesFromObjects(string name, object[] values)
+    private static Series CreateSeriesFromObjects(string name, object[] values)
     {
         if (values.Length == 0)
-            return Series.Series.FromValues(name, Array.Empty<int>());
+            return Series.FromValues(name, Array.Empty<int>());
 
         var firstNonNull = values.FirstOrDefault(v => v != null);
         if (firstNonNull == null)
-            return Series.Series.FromValues(name, values.Select(_ => (string?)null).ToArray());
+            return Series.FromValues(name, values.Select(_ => (string?)null).ToArray());
 
         return firstNonNull switch
         {
-            int => Series.Series.FromValues(name, values.Cast<int>().ToArray()),
-            long => Series.Series.FromValues(name, values.Cast<long>().ToArray()),
-            float => Series.Series.FromValues(name, values.Cast<float>().ToArray()),
-            double => Series.Series.FromValues(name, values.Cast<double>().ToArray()),
-            string => Series.Series.FromValues(name, values.Cast<string>().ToArray()),
-            bool => Series.Series.FromValues(name, values.Cast<bool>().ToArray()),
-            DateTime => Series.Series.FromValues(name, values.Cast<DateTime>().ToArray()),
-            DateOnly => Series.Series.FromValues(name, values.Cast<DateOnly>().ToArray()),
-            _ => Series.Series.FromValues(name, values.Select(v => v?.ToString()).ToArray())
+            int => Series.FromValues(name, values.Cast<int>().ToArray()),
+            long => Series.FromValues(name, values.Cast<long>().ToArray()),
+            float => Series.FromValues(name, values.Cast<float>().ToArray()),
+            double => Series.FromValues(name, values.Cast<double>().ToArray()),
+            string => Series.FromValues(name, values.Cast<string>().ToArray()),
+            bool => Series.FromValues(name, values.Cast<bool>().ToArray()),
+            DateTime => Series.FromValues(name, values.Cast<DateTime>().ToArray()),
+            DateOnly => Series.FromValues(name, values.Cast<DateOnly>().ToArray()),
+            _ => Series.FromValues(name, values.Select(v => v?.ToString()).ToArray())
         };
     }
 
@@ -143,7 +143,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         _columns.Select(c => (c.Name, c.DataType)).ToArray();
 
     /// <summary>Gets a column by name.</summary>
-    public Series.Series this[string name]
+    public Series this[string name]
     {
         get
         {
@@ -154,7 +154,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     }
 
     /// <summary>Gets a column by index.</summary>
-    public Series.Series this[int index] => _columns[index];
+    public Series this[int index] => _columns[index];
 
     /// <summary>Gets multiple columns by name.</summary>
     public DataFrame this[params string[] names] => Select(names);
@@ -171,7 +171,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     }
 
     /// <summary>Selects columns matching a predicate.</summary>
-    public DataFrame SelectIf(Func<Series.Series, bool> predicate)
+    public DataFrame SelectIf(Func<Series, bool> predicate)
     {
         var selected = _columns.Where(predicate).ToArray();
         return new DataFrame(selected);
@@ -223,7 +223,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     }
 
     /// <summary>Filters rows based on a boolean mask.</summary>
-    public DataFrame Filter(Series.Series mask)
+    public DataFrame Filter(Series mask)
     {
         if (mask.DataType is not DataType.BooleanType)
             throw new ArgumentException("Filter mask must be boolean");
@@ -264,9 +264,9 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     // ============================================================================
 
     /// <summary>Adds a new column or replaces an existing one.</summary>
-    public DataFrame WithColumn(Series.Series column)
+    public DataFrame WithColumn(Series column)
     {
-        var columns = new List<Series.Series>(_columns);
+        var columns = new List<Series>(_columns);
 
         if (_columnIndex.TryGetValue(column.Name, out var existingIndex))
         {
@@ -281,7 +281,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     }
 
     /// <summary>Adds multiple columns.</summary>
-    public DataFrame WithColumns(params Series.Series[] columns)
+    public DataFrame WithColumns(params Series[] columns)
     {
         var result = this;
         foreach (var col in columns)
@@ -292,7 +292,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     }
 
     /// <summary>Adds a column derived from existing data.</summary>
-    public DataFrame WithColumn(string name, Func<DataFrame, Series.Series> expression)
+    public DataFrame WithColumn(string name, Func<DataFrame, Series> expression)
     {
         var newColumn = expression(this).Rename(name);
         return WithColumn(newColumn);
@@ -302,7 +302,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     public DataFrame WithRowNumber(string name = "row_nr")
     {
         var indices = Enumerable.Range(0, _height).ToArray();
-        var rowNumSeries = Series.Series.FromValues(name, indices);
+        var rowNumSeries = Series.FromValues(name, indices);
         return WithColumn(rowNumSeries);
     }
 
@@ -395,7 +395,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     public static DataFrame VConcat(params DataFrame[] dfs)
     {
         if (dfs.Length == 0)
-            return new DataFrame(Array.Empty<Series.Series>());
+            return new DataFrame(Array.Empty<Series>());
 
         var schema = dfs[0].Columns;
 
@@ -407,7 +407,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         }
 
         // Concatenate each column
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
         for (int i = 0; i < schema.Count; i++)
         {
             var colName = schema[i];
@@ -429,16 +429,16 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         return new DataFrame(resultColumns);
     }
 
-    private static Series.Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
+    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
     {
         return dtype switch
         {
-            DataType.Int32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float64Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (double?)v.AsFloat64()).ToArray()),
-            DataType.BooleanType => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
+            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
+            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
+            DataType.Float64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (double?)v.AsFloat64()).ToArray()),
+            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
+            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
+            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
     }
 
@@ -446,7 +446,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     public static DataFrame HConcat(params DataFrame[] dfs)
     {
         if (dfs.Length == 0)
-            return new DataFrame(Array.Empty<Series.Series>());
+            return new DataFrame(Array.Empty<Series>());
 
         var height = dfs[0].Height;
         if (dfs.Any(df => df.Height != height))
@@ -465,13 +465,13 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     {
         var numericColumns = _columns.Where(c => c.DataType.IsNumeric).ToArray();
         if (numericColumns.Length == 0)
-            return new DataFrame(Array.Empty<Series.Series>());
+            return new DataFrame(Array.Empty<Series>());
 
         var stats = new[] { "count", "mean", "std", "min", "25%", "50%", "75%", "max" };
-        var columns = new List<Series.Series>();
+        var columns = new List<Series>();
 
         // Stat names column
-        columns.Add(Series.Series.FromValues("statistic", stats));
+        columns.Add(Series.FromValues("statistic", stats));
 
         foreach (var col in numericColumns)
         {
@@ -490,7 +490,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
 
             values.Add(col.Max().TryGetDouble(out var max) ? max : double.NaN);
 
-            columns.Add(Series.Series.FromValues(col.Name, values.ToArray()));
+            columns.Add(Series.FromValues(col.Name, values.ToArray()));
         }
 
         return new DataFrame(columns);
@@ -504,8 +504,8 @@ public sealed class DataFrame : IEnumerable<Series.Series>
 
         return new DataFrame(new[]
         {
-            Series.Series.FromValues("column", names),
-            Series.Series.FromValues("null_count", nullCounts)
+            Series.FromValues("column", names),
+            Series.FromValues("null_count", nullCounts)
         });
     }
 
@@ -538,8 +538,8 @@ public sealed class DataFrame : IEnumerable<Series.Series>
 
         return new DataFrame(new[]
         {
-            Series.Series.FromValues("column", names),
-            Series.Series.FromValues("n_unique", uniqueCounts)
+            Series.FromValues("column", names),
+            Series.FromValues("n_unique", uniqueCounts)
         });
     }
 
@@ -578,10 +578,10 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     private static DataFrame FromRows(List<Dictionary<string, AnyValue>> rows)
     {
         if (rows.Count == 0)
-            return new DataFrame(Array.Empty<Series.Series>());
+            return new DataFrame(Array.Empty<Series>());
 
         var columnNames = rows[0].Keys.ToArray();
-        var columns = new List<Series.Series>();
+        var columns = new List<Series>();
 
         foreach (var colName in columnNames)
         {
@@ -701,7 +701,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
         return sb.ToString();
     }
 
-    private int GetColumnWidth(Series.Series series, int maxRows)
+    private int GetColumnWidth(Series series, int maxRows)
     {
         var maxLen = series.Name.Length;
         maxLen = Math.Max(maxLen, series.DataType.ToString().Length);
@@ -719,7 +719,7 @@ public sealed class DataFrame : IEnumerable<Series.Series>
     // IEnumerable
     // ============================================================================
 
-    public IEnumerator<Series.Series> GetEnumerator()
+    public IEnumerator<Series> GetEnumerator()
     {
         foreach (var col in _columns)
             yield return col;

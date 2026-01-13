@@ -2,9 +2,9 @@
 // Polaire - High-performance DataFrame library for .NET
 
 using Polaire.DataTypes;
-using Polaire.Series;
 
-namespace Polaire.DataFrame;
+
+namespace Polaire;
 
 /// <summary>
 /// Join operations for DataFrames.
@@ -137,7 +137,7 @@ public static class JoinOperations
         var swappedResult = LeftJoin(right, left, rightOn, leftOn, BuildIndex(left, leftOn), suffix);
 
         // Reorder columns: left columns first, then right
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
         var rightCols = new HashSet<string>(right.Columns);
 
         foreach (var col in left.Columns)
@@ -280,7 +280,7 @@ public static class JoinOperations
         string[] leftOn, string[] rightOn,
         string suffix)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
         var rightOnSet = new HashSet<string>(rightOn);
 
         // Left columns
@@ -313,7 +313,7 @@ public static class JoinOperations
         string[] leftOn, string[] rightOn,
         string suffix)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
         var rightOnSet = new HashSet<string>(rightOn);
 
         // Left columns
@@ -343,7 +343,7 @@ public static class JoinOperations
         string[] leftOn, string[] rightOn,
         string suffix)
     {
-        var resultColumns = new List<Series.Series>();
+        var resultColumns = new List<Series>();
         var rightOnSet = new HashSet<string>(rightOn);
 
         // Left columns with null handling
@@ -367,7 +367,7 @@ public static class JoinOperations
         return new DataFrame(resultColumns);
     }
 
-    private static Series.Series BuildNullableColumn(Series.Series source, List<int?> indices)
+    private static Series BuildNullableColumn(Series source, List<int?> indices)
     {
         var values = new List<AnyValue>();
         foreach (var idx in indices)
@@ -381,23 +381,23 @@ public static class JoinOperations
         return BuildSeriesFromAnyValues(source.Name, values, source.DataType);
     }
 
-    private static Series.Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
+    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
     {
         return dtype switch
         {
-            DataType.Int32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float32Type => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
-            DataType.Float64Type => Series.Series.FromNullable(name, values.Select(v =>
+            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
+            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
+            DataType.Float32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
+            DataType.Float64Type => Series.FromNullable(name, values.Select(v =>
             {
                 if (v.IsNull) return null;
                 if (v.TryGetDouble(out var d)) return (double?)d;
                 if (v.TryGetInt64(out var l)) return (double?)l;
                 return null;
             }).ToArray()),
-            DataType.BooleanType => Series.Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
+            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
+            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
+            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
     }
 }

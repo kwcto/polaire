@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 

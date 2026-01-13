@@ -4,7 +4,7 @@
 using System.Text.RegularExpressions;
 using Apache.Arrow;
 using Polaire.DataTypes;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 

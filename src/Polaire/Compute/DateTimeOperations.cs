@@ -4,7 +4,7 @@
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
-using Polaire.Series;
+
 
 namespace Polaire.Compute;
 
@@ -63,12 +63,12 @@ public sealed class DateTimeOperations
 
     public Series Microsecond()
     {
-        return ExtractComponent(dt => (dt.Ticks / 10) % 1000);
+        return ExtractComponent(dt => (int)((dt.Ticks / 10) % 1000));
     }
 
     public Series Nanosecond()
     {
-        return ExtractComponent(dt => (dt.Ticks % 10) * 100);
+        return ExtractComponent(dt => (int)((dt.Ticks % 10) * 100));
     }
 
     // ============================================================================
