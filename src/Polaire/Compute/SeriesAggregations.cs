@@ -229,21 +229,32 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<int>;
         if (data is null) return AnyValue.Null;
 
-        int min = int.MaxValue;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        int min;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path
+            var span = data.GetChunkSpan(0);
+            min = MinVectorized(span);
+        }
+        else
+        {
+            min = int.MaxValue;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (val < min)
+                if (!series.IsNull(i))
                 {
-                    min = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (val < min)
+                    {
+                        min = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(min) : AnyValue.Null;
+        return AnyValue.From(min);
     }
 
     private static AnyValue MinInt64(Series series)
@@ -251,21 +262,32 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<long>;
         if (data is null) return AnyValue.Null;
 
-        long min = long.MaxValue;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        long min;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path
+            var span = data.GetChunkSpan(0);
+            min = MinVectorized(span);
+        }
+        else
+        {
+            min = long.MaxValue;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (val < min)
+                if (!series.IsNull(i))
                 {
-                    min = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (val < min)
+                    {
+                        min = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(min) : AnyValue.Null;
+        return AnyValue.From(min);
     }
 
     private static AnyValue MinFloat32(Series series)
@@ -295,21 +317,34 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<double>;
         if (data is null) return AnyValue.Null;
 
-        double min = double.PositiveInfinity;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        double min;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path (note: NaN handling differs - NaN propagates)
+            var span = data.GetChunkSpan(0);
+            min = MinVectorized(span);
+            if (double.IsNaN(min) || double.IsPositiveInfinity(min))
+                return AnyValue.Null;
+        }
+        else
+        {
+            min = double.PositiveInfinity;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (!double.IsNaN(val) && val < min)
+                if (!series.IsNull(i))
                 {
-                    min = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (!double.IsNaN(val) && val < min)
+                    {
+                        min = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(min) : AnyValue.Null;
+        return AnyValue.From(min);
     }
 
     private static AnyValue MinDate(Series series)
@@ -379,21 +414,32 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<int>;
         if (data is null) return AnyValue.Null;
 
-        int max = int.MinValue;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        int max;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path
+            var span = data.GetChunkSpan(0);
+            max = MaxVectorized(span);
+        }
+        else
+        {
+            max = int.MinValue;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (val > max)
+                if (!series.IsNull(i))
                 {
-                    max = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (val > max)
+                    {
+                        max = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(max) : AnyValue.Null;
+        return AnyValue.From(max);
     }
 
     private static AnyValue MaxInt64(Series series)
@@ -401,21 +447,32 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<long>;
         if (data is null) return AnyValue.Null;
 
-        long max = long.MinValue;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        long max;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path
+            var span = data.GetChunkSpan(0);
+            max = MaxVectorized(span);
+        }
+        else
+        {
+            max = long.MinValue;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (val > max)
+                if (!series.IsNull(i))
                 {
-                    max = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (val > max)
+                    {
+                        max = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(max) : AnyValue.Null;
+        return AnyValue.From(max);
     }
 
     private static AnyValue MaxFloat32(Series series)
@@ -445,21 +502,34 @@ public static class SeriesAggregations
         var data = series.Data as ChunkedArray<double>;
         if (data is null) return AnyValue.Null;
 
-        double max = double.NegativeInfinity;
-        bool found = false;
-        for (int i = 0; i < series.Length; i++)
+        double max;
+        if (!series.HasNulls && data.ChunkCount == 1)
         {
-            if (!series.IsNull(i))
+            // SIMD path (note: NaN handling differs - NaN propagates)
+            var span = data.GetChunkSpan(0);
+            max = MaxVectorized(span);
+            if (double.IsNaN(max) || double.IsNegativeInfinity(max))
+                return AnyValue.Null;
+        }
+        else
+        {
+            max = double.NegativeInfinity;
+            bool found = false;
+            for (int i = 0; i < series.Length; i++)
             {
-                var val = data.GetValue(i);
-                if (!double.IsNaN(val) && val > max)
+                if (!series.IsNull(i))
                 {
-                    max = val;
-                    found = true;
+                    var val = data.GetValue(i);
+                    if (!double.IsNaN(val) && val > max)
+                    {
+                        max = val;
+                        found = true;
+                    }
                 }
             }
+            if (!found) return AnyValue.Null;
         }
-        return found ? AnyValue.From(max) : AnyValue.Null;
+        return AnyValue.From(max);
     }
 
     private static AnyValue MaxGeneric(Series series)
@@ -683,5 +753,195 @@ public static class SeriesAggregations
             sum += span[i];
 
         return sum;
+    }
+
+    // ============================================================================
+    // Vectorized Min Helpers
+    // ============================================================================
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int MinVectorized(ReadOnlySpan<int> span)
+    {
+        int min = int.MaxValue;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<int>.Count)
+        {
+            var vMin = new Vector<int>(int.MaxValue);
+            var vectorCount = span.Length - (span.Length % Vector<int>.Count);
+
+            for (; i < vectorCount; i += Vector<int>.Count)
+            {
+                vMin = Vector.Min(vMin, new Vector<int>(span.Slice(i)));
+            }
+
+            // Reduce vector to scalar
+            for (int j = 0; j < Vector<int>.Count; j++)
+            {
+                if (vMin[j] < min) min = vMin[j];
+            }
+        }
+
+        // Scalar remainder
+        for (; i < span.Length; i++)
+        {
+            if (span[i] < min) min = span[i];
+        }
+
+        return min;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long MinVectorized(ReadOnlySpan<long> span)
+    {
+        long min = long.MaxValue;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<long>.Count)
+        {
+            var vMin = new Vector<long>(long.MaxValue);
+            var vectorCount = span.Length - (span.Length % Vector<long>.Count);
+
+            for (; i < vectorCount; i += Vector<long>.Count)
+            {
+                vMin = Vector.Min(vMin, new Vector<long>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<long>.Count; j++)
+            {
+                if (vMin[j] < min) min = vMin[j];
+            }
+        }
+
+        for (; i < span.Length; i++)
+        {
+            if (span[i] < min) min = span[i];
+        }
+
+        return min;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double MinVectorized(ReadOnlySpan<double> span)
+    {
+        double min = double.PositiveInfinity;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            var vMin = new Vector<double>(double.PositiveInfinity);
+            var vectorCount = span.Length - (span.Length % Vector<double>.Count);
+
+            for (; i < vectorCount; i += Vector<double>.Count)
+            {
+                vMin = Vector.Min(vMin, new Vector<double>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<double>.Count; j++)
+            {
+                if (vMin[j] < min) min = vMin[j];
+            }
+        }
+
+        for (; i < span.Length; i++)
+        {
+            if (span[i] < min) min = span[i];
+        }
+
+        return min;
+    }
+
+    // ============================================================================
+    // Vectorized Max Helpers
+    // ============================================================================
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int MaxVectorized(ReadOnlySpan<int> span)
+    {
+        int max = int.MinValue;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<int>.Count)
+        {
+            var vMax = new Vector<int>(int.MinValue);
+            var vectorCount = span.Length - (span.Length % Vector<int>.Count);
+
+            for (; i < vectorCount; i += Vector<int>.Count)
+            {
+                vMax = Vector.Max(vMax, new Vector<int>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<int>.Count; j++)
+            {
+                if (vMax[j] > max) max = vMax[j];
+            }
+        }
+
+        for (; i < span.Length; i++)
+        {
+            if (span[i] > max) max = span[i];
+        }
+
+        return max;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long MaxVectorized(ReadOnlySpan<long> span)
+    {
+        long max = long.MinValue;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<long>.Count)
+        {
+            var vMax = new Vector<long>(long.MinValue);
+            var vectorCount = span.Length - (span.Length % Vector<long>.Count);
+
+            for (; i < vectorCount; i += Vector<long>.Count)
+            {
+                vMax = Vector.Max(vMax, new Vector<long>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<long>.Count; j++)
+            {
+                if (vMax[j] > max) max = vMax[j];
+            }
+        }
+
+        for (; i < span.Length; i++)
+        {
+            if (span[i] > max) max = span[i];
+        }
+
+        return max;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double MaxVectorized(ReadOnlySpan<double> span)
+    {
+        double max = double.NegativeInfinity;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            var vMax = new Vector<double>(double.NegativeInfinity);
+            var vectorCount = span.Length - (span.Length % Vector<double>.Count);
+
+            for (; i < vectorCount; i += Vector<double>.Count)
+            {
+                vMax = Vector.Max(vMax, new Vector<double>(span.Slice(i)));
+            }
+
+            for (int j = 0; j < Vector<double>.Count; j++)
+            {
+                if (vMax[j] > max) max = vMax[j];
+            }
+        }
+
+        for (; i < span.Length; i++)
+        {
+            if (span[i] > max) max = span[i];
+        }
+
+        return max;
     }
 }
