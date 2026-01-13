@@ -186,7 +186,7 @@ Polaire leverages modern .NET performance features:
 
 ## Current Status
 
-- **163 tests passing**
+- **255 tests passing**
 - **Build:** Clean (0 warnings, 0 errors)
 - **Target:** .NET 8.0
 

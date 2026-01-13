@@ -9,7 +9,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (January 2025)
 
 - **Build:** Passing
-- **Tests:** 163 passing, 0 failing
+- **Tests:** 255 passing, 0 failing
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
 - **Lazy Scanning:** Implemented with predicate/projection pushdown
@@ -238,6 +238,66 @@ if (AdvSimd.IsSupported && span.Length >= 16)
 }
 ```
 
+### Session 9 (Edge Case Tests & SIMD NaN Bug Fix - January 2025)
+- **Test Coverage Audit**: Compared Polaire (167 tests) vs Polars (~5,000-10,000+ tests in 203 test files)
+- **Critical Bug Found**: SIMD/Scalar path divergence for NaN handling in Min/Max
+  - SIMD path propagated NaN (IEEE 754 behavior)
+  - Scalar path skipped NaN (Polars semantics)
+  - Result: Inconsistent behavior based on array size (< 8 elements = correct, ≥ 8 = wrong)
+- **Bug Fixed**: Updated `MinFloat64`, `MaxFloat64`, `MinFloat32`, `MaxFloat32` in `SeriesAggregations.cs`
+  - If SIMD returns NaN or initial infinity, fall through to scalar path
+- **Created `EdgeCaseTests.cs`**: 88 new test methods covering:
+  - SIMD boundary tests (0, 1, 7, 8, 9, 15, 16, 17, 32, 100, 1000 elements)
+  - NaN handling (single NaN, all NaN, mixed with real values)
+  - Infinity handling (positive, negative, both)
+  - Integer overflow (Int32 → Int64 accumulator verification)
+  - Floating-point precision (catastrophic cancellation detection)
+  - Null handling (all nulls, partial nulls)
+- **Test count**: 167 → 255 (+88 new tests)
+
+**The SIMD NaN Bug Pattern** (before fix):
+```csharp
+// SIMD Min/Max propagates NaN per IEEE 754
+// If array = [NaN, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0] (8 elements)
+// SIMD: AdvSimd.Arm64.Min(NaN, 1.0) → NaN (propagated!)
+// Result: Null (wrong - should be 1.0)
+
+// If array = [NaN, 1.0, 2.0] (3 elements, scalar path)
+// Scalar: skips NaN, returns 1.0 (correct)
+```
+
+**The Fix Pattern** (in `MinFloat64`, `MaxFloat64`, etc.):
+```csharp
+if (!series.HasNulls && data.ChunkCount == 1)
+{
+    var span = data.GetChunkSpan(0);
+    min = MinVectorized(span);
+
+    // NEW: If SIMD returned valid value, use it; otherwise fallback to scalar
+    if (!double.IsNaN(min) && !double.IsPositiveInfinity(min))
+    {
+        return AnyValue.From(min);
+    }
+    // Fall through to scalar path for NaN handling
+}
+
+// Scalar path: explicitly skip NaN values (Polars semantics)
+for (int i = 0; i < series.Length; i++)
+{
+    if (!series.IsNull(i))
+    {
+        var val = data.GetValue(i);
+        if (!double.IsNaN(val) && val < min)
+        {
+            min = val;
+            found = true;
+        }
+    }
+}
+```
+
+**Key Insight**: IEEE 754 SIMD operations propagate NaN, but Polars semantics require skipping NaN. The fix detects when SIMD returns an "invalid" result and falls back to the scalar path which handles NaN correctly.
+
 ## Design Objectives (from original requirements)
 
 1. **Feature Parity** - Match Polars functionality
@@ -337,10 +397,12 @@ Run comparison: `source .venv/bin/activate && python benchmarks/polars_compariso
 1. ~~**Performance Comparison with Polars**~~ ✓ Done (now at parity!)
 2. ~~**SIMD for Std/Var**~~ ✓ Done (39x improvement)
 3. ~~**Architecture-Specific Intrinsics**~~ ✓ Done (3.5x improvement, parity with Polars!)
-4. **SQL Interface** - Use SqlParser to execute SQL queries
-5. **Window Functions** - Rolling aggregations, rank, etc.
-6. **More String Operations** - Regex, split, extract, etc.
-7. **Streaming I/O** - Process files larger than memory
+4. ~~**Critical Edge Case Tests**~~ ✓ Done (Session 9: 88 new tests, SIMD NaN bug fixed)
+5. **Property-Based Testing** - Add FsCheck for exhaustive input generation
+6. **SQL Interface** - Use SqlParser to execute SQL queries
+7. **Window Functions** - Rolling aggregations, rank, etc.
+8. **More String Operations** - Regex, split, extract, etc.
+9. **Streaming I/O** - Process files larger than memory
 
 ## Performance Optimization Opportunities
 

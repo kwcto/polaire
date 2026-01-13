@@ -322,32 +322,38 @@ public static class SeriesAggregations
         if (data is null) return AnyValue.Null;
 
         float min;
+
         if (!series.HasNulls && data.ChunkCount == 1)
         {
-            // SIMD path (note: NaN handling differs - NaN propagates)
+            // SIMD path (note: NaN propagates through SIMD Min, so we may need fallback)
             var span = data.GetChunkSpan(0);
             min = MinVectorizedFloat32(span);
-            if (float.IsNaN(min) || float.IsPositiveInfinity(min))
-                return AnyValue.Null;
-        }
-        else
-        {
-            min = float.PositiveInfinity;
-            bool found = false;
-            for (int i = 0; i < series.Length; i++)
+
+            // If SIMD returned a valid value (not NaN, not initial infinity), use it
+            if (!float.IsNaN(min) && !float.IsPositiveInfinity(min))
             {
-                if (!series.IsNull(i))
+                return AnyValue.From(min);
+            }
+            // Otherwise fall through to scalar path to handle NaN correctly
+        }
+
+        // Scalar path: explicitly skip NaN values (Polars semantics)
+        min = float.PositiveInfinity;
+        bool found = false;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = data.GetValue(i);
+                if (!float.IsNaN(val) && val < min)
                 {
-                    var val = data.GetValue(i);
-                    if (!float.IsNaN(val) && val < min)
-                    {
-                        min = val;
-                        found = true;
-                    }
+                    min = val;
+                    found = true;
                 }
             }
-            if (!found) return AnyValue.Null;
         }
+
+        if (!found) return AnyValue.Null;
         return AnyValue.From(min);
     }
 
@@ -357,9 +363,10 @@ public static class SeriesAggregations
         if (data is null) return AnyValue.Null;
 
         double min;
+
         if (!series.HasNulls && data.ChunkCount == 1)
         {
-            // SIMD path (note: NaN handling differs - NaN propagates)
+            // SIMD path (note: NaN propagates through SIMD Min, so we may need fallback)
             var span = data.GetChunkSpan(0);
             if (span.Length >= ParallelThreshold)
             {
@@ -369,27 +376,32 @@ public static class SeriesAggregations
             {
                 min = MinVectorized(span);
             }
-            if (double.IsNaN(min) || double.IsPositiveInfinity(min))
-                return AnyValue.Null;
-        }
-        else
-        {
-            min = double.PositiveInfinity;
-            bool found = false;
-            for (int i = 0; i < series.Length; i++)
+
+            // If SIMD returned a valid value (not NaN, not initial infinity), use it
+            if (!double.IsNaN(min) && !double.IsPositiveInfinity(min))
             {
-                if (!series.IsNull(i))
+                return AnyValue.From(min);
+            }
+            // Otherwise fall through to scalar path to handle NaN correctly
+        }
+
+        // Scalar path: explicitly skip NaN values (Polars semantics)
+        min = double.PositiveInfinity;
+        bool found = false;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = data.GetValue(i);
+                if (!double.IsNaN(val) && val < min)
                 {
-                    var val = data.GetValue(i);
-                    if (!double.IsNaN(val) && val < min)
-                    {
-                        min = val;
-                        found = true;
-                    }
+                    min = val;
+                    found = true;
                 }
             }
-            if (!found) return AnyValue.Null;
         }
+
+        if (!found) return AnyValue.Null;
         return AnyValue.From(min);
     }
 
@@ -527,32 +539,38 @@ public static class SeriesAggregations
         if (data is null) return AnyValue.Null;
 
         float max;
+
         if (!series.HasNulls && data.ChunkCount == 1)
         {
-            // SIMD path (note: NaN handling differs - NaN propagates)
+            // SIMD path (note: NaN propagates through SIMD Max, so we may need fallback)
             var span = data.GetChunkSpan(0);
             max = MaxVectorizedFloat32(span);
-            if (float.IsNaN(max) || float.IsNegativeInfinity(max))
-                return AnyValue.Null;
-        }
-        else
-        {
-            max = float.NegativeInfinity;
-            bool found = false;
-            for (int i = 0; i < series.Length; i++)
+
+            // If SIMD returned a valid value (not NaN, not initial infinity), use it
+            if (!float.IsNaN(max) && !float.IsNegativeInfinity(max))
             {
-                if (!series.IsNull(i))
+                return AnyValue.From(max);
+            }
+            // Otherwise fall through to scalar path to handle NaN correctly
+        }
+
+        // Scalar path: explicitly skip NaN values (Polars semantics)
+        max = float.NegativeInfinity;
+        bool found = false;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = data.GetValue(i);
+                if (!float.IsNaN(val) && val > max)
                 {
-                    var val = data.GetValue(i);
-                    if (!float.IsNaN(val) && val > max)
-                    {
-                        max = val;
-                        found = true;
-                    }
+                    max = val;
+                    found = true;
                 }
             }
-            if (!found) return AnyValue.Null;
         }
+
+        if (!found) return AnyValue.Null;
         return AnyValue.From(max);
     }
 
@@ -562,9 +580,10 @@ public static class SeriesAggregations
         if (data is null) return AnyValue.Null;
 
         double max;
+
         if (!series.HasNulls && data.ChunkCount == 1)
         {
-            // SIMD path (note: NaN handling differs - NaN propagates)
+            // SIMD path (note: NaN propagates through SIMD Max, so we may need fallback)
             var span = data.GetChunkSpan(0);
             if (span.Length >= ParallelThreshold)
             {
@@ -574,27 +593,32 @@ public static class SeriesAggregations
             {
                 max = MaxVectorized(span);
             }
-            if (double.IsNaN(max) || double.IsNegativeInfinity(max))
-                return AnyValue.Null;
-        }
-        else
-        {
-            max = double.NegativeInfinity;
-            bool found = false;
-            for (int i = 0; i < series.Length; i++)
+
+            // If SIMD returned a valid value (not NaN, not initial infinity), use it
+            if (!double.IsNaN(max) && !double.IsNegativeInfinity(max))
             {
-                if (!series.IsNull(i))
+                return AnyValue.From(max);
+            }
+            // Otherwise fall through to scalar path to handle NaN correctly
+        }
+
+        // Scalar path: explicitly skip NaN values (Polars semantics)
+        max = double.NegativeInfinity;
+        bool found = false;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = data.GetValue(i);
+                if (!double.IsNaN(val) && val > max)
                 {
-                    var val = data.GetValue(i);
-                    if (!double.IsNaN(val) && val > max)
-                    {
-                        max = val;
-                        found = true;
-                    }
+                    max = val;
+                    found = true;
                 }
             }
-            if (!found) return AnyValue.Null;
         }
+
+        if (!found) return AnyValue.Null;
         return AnyValue.From(max);
     }
 
