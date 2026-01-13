@@ -9,8 +9,10 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (January 2025)
 
 - **Build:** Passing
-- **Tests:** 127 passing, 0 failing
+- **Tests:** 163 passing, 0 failing
 - **Target:** .NET 8.0
+- **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
+- **Lazy Scanning:** Implemented with predicate/projection pushdown
 
 ### To Build & Test
 ```bash
@@ -35,7 +37,8 @@ polaire/
 │   ├── DataFrame/         # DataFrame, GroupBy, JoinOperations
 │   ├── Compute/           # SIMD operations, aggregations
 │   ├── Expressions/       # Expr tree, ExprEvaluator
-│   ├── LazyFrame/         # LazyFrame, LogicalPlan, QueryOptimizer
+│   ├── LazyFrame/         # LazyFrame, LogicalPlan, QueryOptimizer, PlanExecutor
+│   ├── IO/                # CSV, Parquet, JSON readers/writers
 │   ├── Memory/            # MemoryPool, ValidityBitmap
 │   └── Polaire.cs         # Main API entry point (Pl class)
 ├── tests/Polaire.Tests/   # xUnit tests
@@ -61,22 +64,24 @@ polaire/
 ## Known Issues / TODOs
 
 ### Not Yet Implemented
-- CSV/Parquet/JSON I/O (methods exist but throw NotImplementedException)
-- SQL interface
-- Streaming/chunked processing
+- SQL interface (SqlParser dependency ready)
+- Streaming/chunked processing for very large files
 - GPU acceleration
+- Window functions
+- More string operations
 
 ### Technical Debt
 - `MemoryPool.Memory<T>` property creates a copy (performance impact)
 - `VectorScalarOp` uses scalar fallback (SIMD optimization removed due to delegate comparison issue)
 - XML documentation incomplete (CS1591 warnings suppressed)
+- Min/Max aggregations not SIMD optimized (50-60x slower than Sum/Mean)
 
 ## Dependencies
 
 - `Apache.Arrow` 18.0.0 - Columnar data format
 - `SqlParser` 1.0.2 - SQL parsing (for future SQL interface)
-- `Parquet.Net` 5.0.2 - Parquet file support (not yet implemented)
-- `CsvHelper` 33.0.1 - CSV parsing (not yet implemented)
+- `Parquet.Net` 5.0.2 - Parquet file support
+- `CsvHelper` 33.0.1 - CSV parsing
 - `System.Text.Json` 8.0.5 - JSON support
 
 ## Session History
@@ -97,6 +102,23 @@ polaire/
 - Fixed GroupBy aggregation type inference for aliased expressions
 - All 127 tests now passing
 - Added README.md and LICENSE
+
+### Session 3 (I/O Implementation - January 2025)
+- Implemented full I/O module:
+  - `CsvReader` / `CsvWriter` with parallel parsing
+  - `ParquetReader` / `ParquetWriter`
+  - `JsonReader` / `NdjsonReader`
+- Added lazy scanning (`ScanCsv`, `ScanParquet`, `ScanNdjson`)
+- Predicate pushdown to file scans
+- Projection pushdown to file scans
+- Added 36 new I/O tests (148 total)
+
+### Session 4 (Benchmarks & Fixes - January 2025)
+- Ran full benchmark suite (70 benchmarks)
+- Fixed `Series.Slice()` to support all 14 data types (was only 3)
+- Added `Slice()` method to `StringChunkedArray`
+- Fixed Head and LazyChainedOperations benchmarks
+- All 163 tests passing
 
 ## Design Objectives (from original requirements)
 
@@ -140,4 +162,47 @@ df.Lazy().Filter(...).Select(...).Collect()
 // GroupBy
 df.GroupBy("key").Sum()
 df.GroupBy("key").Agg(Col("value").Mean().As("avg"))
+
+// I/O - Eager
+var df = ReadCsv("data.csv");
+var df = ReadParquet("data.parquet");
+df.WriteCsv("output.csv");
+df.WriteParquet("output.parquet");
+
+// I/O - Lazy (enables optimization)
+var result = ScanCsv("large.csv")
+    .Filter(Col("status").Eq("active"))  // Pushdown to reader
+    .Select("id", "name")                 // Only these columns read
+    .Collect();
 ```
+
+## Benchmark Results (Apple M1 Max, .NET 8.0)
+
+### SIMD-Optimized Operations (excellent performance)
+| Operation | 1K | 10K | 100K | 1M |
+|-----------|-----|------|------|------|
+| Sum | 511 ns | 4.8 µs | 48 µs | 489 µs |
+| Mean | 515 ns | 4.8 µs | 48 µs | 486 µs |
+| Addition | 6 µs | 56 µs | 691 µs | 6.7 ms |
+
+### DataFrame Operations
+| Operation | 1K | 10K | 100K |
+|-----------|------|-------|--------|
+| Select | 157 ns | 156 ns | 158 ns |
+| Filter | 287 µs | 2.9 ms | 28.4 ms |
+| Sort | 1.15 ms | 14.3 ms | 190 ms |
+| GroupBySum | 375 µs | 2.5 ms | 25.4 ms |
+| Join | 318 µs | 5.4 ms | - |
+
+### Known Performance Issues
+- Min/Max: 50-60x slower than Sum (not SIMD optimized)
+- Std/Var: Similar to Min/Max
+
+## Next Steps / Roadmap
+
+1. **Performance Comparison with Polars** - Run equivalent benchmarks
+2. **SIMD for Min/Max** - Implement vectorized min/max
+3. **SQL Interface** - Use SqlParser to execute SQL queries
+4. **Window Functions** - Rolling aggregations, rank, etc.
+5. **More String Operations** - Regex, split, extract, etc.
+6. **Streaming I/O** - Process files larger than memory
