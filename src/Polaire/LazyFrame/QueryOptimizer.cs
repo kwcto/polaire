@@ -451,6 +451,20 @@ public static class QueryOptimizer
                 CollectColumns(fillNull.Inner, columns);
                 CollectColumns(fillNull.Fill, columns);
                 break;
+            case Expr.IsIn isIn:
+                CollectColumns(isIn.Inner, columns);
+                break;
+            case Expr.Between between:
+                CollectColumns(between.Inner, columns);
+                CollectColumns(between.Lower, columns);
+                CollectColumns(between.Upper, columns);
+                break;
+            case Expr.Str str:
+                CollectColumns(str.Inner, columns);
+                break;
+            case Expr.Dt dt:
+                CollectColumns(dt.Inner, columns);
+                break;
         }
     }
 }

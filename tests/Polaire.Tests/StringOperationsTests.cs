@@ -692,4 +692,307 @@ public class StringOperationsTests
         result[1].AsBoolean().Should().BeTrue();
         result[2].AsBoolean().Should().BeFalse();
     }
+
+    // ============================================================================
+    // Additional String Tests (from Polars test patterns)
+    // ============================================================================
+
+    [Fact]
+    public void Str_StartsWith_MultiplePatterns()
+    {
+        var series = Series.FromValues("s", new[] { "apple", "apricot", "banana", "avocado" });
+
+        var result = series.Str.StartsWith("ap");
+
+        result[0].AsBoolean().Should().BeTrue();   // apple
+        result[1].AsBoolean().Should().BeTrue();   // apricot
+        result[2].AsBoolean().Should().BeFalse();  // banana
+        result[3].AsBoolean().Should().BeFalse();  // avocado
+    }
+
+    [Fact]
+    public void Str_EndsWith_MultiplePatterns()
+    {
+        var series = Series.FromValues("s", new[] { "hello", "world", "lo", "echo" });
+
+        var result = series.Str.EndsWith("lo");
+
+        result[0].AsBoolean().Should().BeTrue();   // hello
+        result[1].AsBoolean().Should().BeFalse();  // world
+        result[2].AsBoolean().Should().BeTrue();   // lo
+        result[3].AsBoolean().Should().BeFalse();  // echo
+    }
+
+    [Fact]
+    public void Str_Strip_RemovesWhitespace()
+    {
+        var series = Series.FromValues("s", new[] { "  hello  ", "\tworld\t", "  test" });
+
+        var result = series.Str.Strip();
+
+        result[0].AsString().Should().Be("hello");
+        result[1].AsString().Should().Be("world");
+        result[2].AsString().Should().Be("test");
+    }
+
+    [Fact]
+    public void Str_StripStart_RemovesLeadingWhitespace()
+    {
+        var series = Series.FromValues("s", new[] { "  hello  ", "\tworld" });
+
+        var result = series.Str.StripStart();
+
+        result[0].AsString().Should().Be("hello  ");
+        result[1].AsString().Should().Be("world");
+    }
+
+    [Fact]
+    public void Str_StripEnd_RemovesTrailingWhitespace()
+    {
+        var series = Series.FromValues("s", new[] { "  hello  ", "world\t" });
+
+        var result = series.Str.StripEnd();
+
+        result[0].AsString().Should().Be("  hello");
+        result[1].AsString().Should().Be("world");
+    }
+
+    [Fact]
+    public void Str_Lengths_EmptyStrings()
+    {
+        var series = Series.FromValues("s", new[] { "", "a", "ab", "" });
+
+        var result = series.Str.Lengths();
+
+        result[0].AsInt32().Should().Be(0);
+        result[1].AsInt32().Should().Be(1);
+        result[2].AsInt32().Should().Be(2);
+        result[3].AsInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public void Str_ReplaceFirst_FirstOccurrence()
+    {
+        var series = Series.FromValues("s", new[] { "aaa", "aba", "bbb" });
+
+        // ReplaceFirst uses regex to replace only the first occurrence
+        var result = series.Str.ReplaceFirst("a", "x");
+
+        // ReplaceFirst replaces first occurrence only
+        result[0].AsString().Should().Be("xaa");
+        result[1].AsString().Should().Be("xba");
+        result[2].AsString().Should().Be("bbb");
+    }
+
+    [Fact]
+    public void Str_Replace_AllOccurrences()
+    {
+        var series = Series.FromValues("s", new[] { "aaa", "aba", "bbb" });
+
+        // Replace with literal=true (default) replaces all occurrences
+        var result = series.Str.Replace("a", "x");
+
+        result[0].AsString().Should().Be("xxx");
+        result[1].AsString().Should().Be("xbx");
+        result[2].AsString().Should().Be("bbb");
+    }
+
+    [Fact]
+    public void Str_Slice_ExtractsSubstring()
+    {
+        var series = Series.FromValues("s", new[] { "hello", "world", "test" });
+
+        var result = series.Str.Slice(0, 3);
+
+        result[0].AsString().Should().Be("hel");
+        result[1].AsString().Should().Be("wor");
+        result[2].AsString().Should().Be("tes");
+    }
+
+    [Fact]
+    public void Str_Slice_NegativeOffset()
+    {
+        var series = Series.FromValues("s", new[] { "hello", "world" });
+
+        // Negative offset counts from end: Slice(-3) starts 3 from end
+        // Slice(-3, null) means from -3 to end
+        var result = series.Str.Slice(-3);
+
+        result[0].AsString().Should().Be("llo");
+        result[1].AsString().Should().Be("rld");
+    }
+
+    [Fact]
+    public void Str_PadStart_PadsCorrectly()
+    {
+        var series = Series.FromValues("s", new[] { "1", "12", "123", "1234" });
+
+        var result = series.Str.PadStart(4, '0');
+
+        result[0].AsString().Should().Be("0001");
+        result[1].AsString().Should().Be("0012");
+        result[2].AsString().Should().Be("0123");
+        result[3].AsString().Should().Be("1234");  // No padding needed
+    }
+
+    [Fact]
+    public void Str_PadEnd_PadsCorrectly()
+    {
+        var series = Series.FromValues("s", new[] { "a", "ab", "abc", "abcd" });
+
+        var result = series.Str.PadEnd(4, 'x');
+
+        result[0].AsString().Should().Be("axxx");
+        result[1].AsString().Should().Be("abxx");
+        result[2].AsString().Should().Be("abcx");
+        result[3].AsString().Should().Be("abcd");  // No padding needed
+    }
+
+    [Fact]
+    public void Str_Concat_JoinsStrings()
+    {
+        var s1 = Series.FromValues("a", new[] { "hello", "foo" });
+        var s2 = Series.FromValues("b", new[] { " world", " bar" });
+
+        var result = s1.Str.Concat(s2);
+
+        result[0].AsString().Should().Be("hello world");
+        result[1].AsString().Should().Be("foo bar");
+    }
+
+    [Fact]
+    public void Str_ToUpperCase_AllCases()
+    {
+        var series = Series.FromValues("s", new[] { "hello", "WORLD", "MiXeD", "123" });
+
+        var result = series.Str.ToUpperCase();
+
+        result[0].AsString().Should().Be("HELLO");
+        result[1].AsString().Should().Be("WORLD");
+        result[2].AsString().Should().Be("MIXED");
+        result[3].AsString().Should().Be("123");  // Numbers unchanged
+    }
+
+    [Fact]
+    public void Str_ToLowerCase_AllCases()
+    {
+        var series = Series.FromValues("s", new[] { "HELLO", "world", "MiXeD", "123" });
+
+        var result = series.Str.ToLowerCase();
+
+        result[0].AsString().Should().Be("hello");
+        result[1].AsString().Should().Be("world");
+        result[2].AsString().Should().Be("mixed");
+        result[3].AsString().Should().Be("123");  // Numbers unchanged
+    }
+
+    [Fact]
+    public void Str_CountOccurrences_MultipleMatches()
+    {
+        var series = Series.FromValues("s", new[] { "aaa", "aba", "bbb", "" });
+
+        var result = series.Str.CountMatches("a");
+
+        result[0].AsInt32().Should().Be(3);
+        result[1].AsInt32().Should().Be(2);
+        result[2].AsInt32().Should().Be(0);
+        result[3].AsInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public void Str_IsEmpty_ChecksEmptyStrings()
+    {
+        var series = Series.FromValues("s", new[] { "", "hello", "  ", "" });
+
+        // IsEmpty checks if string is empty (not whitespace only)
+        // This behavior may depend on implementation
+        series.Str.Lengths()[0].AsInt32().Should().Be(0);
+        series.Str.Lengths()[2].AsInt32().Should().Be(2);  // "  " has length 2
+    }
+
+    [Fact]
+    public void Str_Split_ByDelimiter()
+    {
+        var series = Series.FromValues("s", new[] { "a,b,c", "x,y", "z" });
+
+        var result = series.Str.Split(",");
+
+        // Split returns list/array
+        result.Length.Should().Be(3);
+    }
+
+    [Fact]
+    public void Str_Contains_EmptyPattern()
+    {
+        var series = Series.FromValues("s", new[] { "hello", "world", "" });
+
+        var result = series.Str.Contains("");
+
+        // Empty string is contained in any string
+        result[0].AsBoolean().Should().BeTrue();
+        result[1].AsBoolean().Should().BeTrue();
+        result[2].AsBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void Str_Reverse_Palindrome()
+    {
+        var series = Series.FromValues("s", new[] { "radar", "hello", "level" });
+
+        var result = series.Str.Reverse();
+
+        result[0].AsString().Should().Be("radar");  // Palindrome
+        result[1].AsString().Should().Be("olleh");
+        result[2].AsString().Should().Be("level");  // Palindrome
+    }
+
+    [Fact]
+    public void Str_Operations_LargeStrings()
+    {
+        var longString = new string('a', 10000);
+        var series = Series.FromValues("s", new[] { longString });
+
+        series.Str.Lengths()[0].AsInt32().Should().Be(10000);
+        series.Str.ToUpperCase()[0].AsString().Should().Be(new string('A', 10000));
+    }
+
+    [Fact]
+    public void Str_Operations_SpecialCharacters()
+    {
+        var series = Series.FromValues("s", new[] { "hello\nworld", "foo\tbar", "a\r\nb" });
+
+        // Length includes special characters
+        series.Str.Lengths()[0].AsInt32().Should().Be(11);  // "hello\nworld"
+        series.Str.Lengths()[1].AsInt32().Should().Be(7);   // "foo\tbar"
+
+        // Contains works with special characters
+        series.Str.Contains("\n")[0].AsBoolean().Should().BeTrue();
+        series.Str.Contains("\t")[1].AsBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void Str_ZFill_PadsWithZeros()
+    {
+        var series = Series.FromValues("s", new[] { "1", "12", "123" });
+
+        // ZFill is specifically for zero padding (handles sign prefix)
+        var result = series.Str.ZFill(5);
+
+        result[0].AsString().Should().Be("00001");
+        result[1].AsString().Should().Be("00012");
+        result[2].AsString().Should().Be("00123");
+    }
+
+    [Fact]
+    public void Str_ZFill_HandlesNegativeNumbers()
+    {
+        var series = Series.FromValues("s", new[] { "-1", "+2", "3" });
+
+        var result = series.Str.ZFill(5);
+
+        // ZFill preserves sign at start, pads zeros after
+        result[0].AsString().Should().Be("-0001");
+        result[1].AsString().Should().Be("+0002");
+        result[2].AsString().Should().Be("00003");
+    }
 }

@@ -311,7 +311,7 @@ public class JoinOperationsTests
     }
 
     [Fact]
-    public void Join_StringKeys_WorksCorrectly()
+    public void Join_StringKeys_Basic_WorksCorrectly()
     {
         var left = new DataFrame(
             Series.FromValues("key", new[] { "A", "B", "C" }),
@@ -410,5 +410,382 @@ public class JoinOperationsTests
         var result = left.Join(right, "id");
 
         result.Width.Should().Be(7); // id + 3 left + 3 right
+    }
+
+    // ============================================================================
+    // Semi Join Tests (ported from Polars test_semi_anti_join)
+    // ============================================================================
+
+    [Fact]
+    public void SemiJoin_ReturnsMatchingLeftRows()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2 }),
+            Series.FromValues("c", new[] { 100, 200 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Semi);
+
+        result.Height.Should().Be(2);
+        result.Columns.Should().BeEquivalentTo(new[] { "a", "b" }); // Only left columns
+        result["a"].ToArray<int>().Should().BeEquivalentTo(new[] { 1, 2 });
+    }
+
+    [Fact]
+    public void SemiJoin_NoMatches_ReturnsEmpty()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 4, 5, 6 }),
+            Series.FromValues("c", new[] { 400, 500, 600 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Semi);
+
+        result.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void SemiJoin_AllMatch_ReturnsAllLeft()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4 }),
+            Series.FromValues("c", new[] { 100, 200, 300, 400 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Semi);
+
+        result.Height.Should().Be(3);
+    }
+
+    // ============================================================================
+    // Anti Join Tests (ported from Polars test_semi_anti_join)
+    // ============================================================================
+
+    [Fact]
+    public void AntiJoin_ReturnsNonMatchingLeftRows()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2 }),
+            Series.FromValues("c", new[] { 100, 200 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Anti);
+
+        result.Height.Should().Be(1);
+        result.Columns.Should().BeEquivalentTo(new[] { "a", "b" }); // Only left columns
+        result["a"][0].AsInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public void AntiJoin_NoMatches_ReturnsAllLeft()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 4, 5, 6 }),
+            Series.FromValues("c", new[] { 400, 500, 600 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Anti);
+
+        result.Height.Should().Be(3);
+    }
+
+    [Fact]
+    public void AntiJoin_AllMatch_ReturnsEmpty()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("b", new[] { "one", "two", "three" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 }),
+            Series.FromValues("c", new[] { 100, 200, 300 })
+        );
+
+        var result = left.Join(right, new[] { "a" }, new[] { "a" }, JoinType.Anti);
+
+        result.Height.Should().Be(0);
+    }
+
+    // ============================================================================
+    // Cross Join Tests (ported from Polars test_cross_join)
+    // ============================================================================
+
+    [Fact]
+    public void CrossJoin_ReturnsCartesianProduct()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("b", new[] { "x", "y", "z" })
+        );
+
+        var result = left.Join(right, Array.Empty<string>(), Array.Empty<string>(), JoinType.Cross);
+
+        result.Height.Should().Be(6); // 2 * 3 = 6
+        result.Columns.Should().Contain("a");
+        result.Columns.Should().Contain("b");
+    }
+
+    [Fact]
+    public void CrossJoin_EmptyLeft_ReturnsEmpty()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", Array.Empty<int>())
+        );
+        var right = new DataFrame(
+            Series.FromValues("b", new[] { "x", "y", "z" })
+        );
+
+        var result = left.Join(right, Array.Empty<string>(), Array.Empty<string>(), JoinType.Cross);
+
+        result.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void CrossJoin_EmptyRight_ReturnsEmpty()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("b", Array.Empty<string>())
+        );
+
+        var result = left.Join(right, Array.Empty<string>(), Array.Empty<string>(), JoinType.Cross);
+
+        result.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void CrossJoin_SingleRowEach_ReturnsSingleRow()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { 1 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("b", new[] { "x" })
+        );
+
+        var result = left.Join(right, Array.Empty<string>(), Array.Empty<string>(), JoinType.Cross);
+
+        result.Height.Should().Be(1);
+        result["a"][0].AsInt32().Should().Be(1);
+        result["b"][0].AsString().Should().Be("x");
+    }
+
+    // ============================================================================
+    // Negative Integer Join Tests (ported from Polars test_join_negative_integers)
+    // ============================================================================
+
+    [Fact]
+    public void Join_NegativeIntegers_WorksCorrectly()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new[] { -2, -1, 0, 1, 2 }),
+            Series.FromValues("b", new[] { "neg2", "neg1", "zero", "one", "two" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new[] { -1, 1 }),
+            Series.FromValues("c", new[] { 100, 200 })
+        );
+
+        var result = left.Join(right, "a");
+
+        result.Height.Should().Be(2);
+        result["b"].ToArray<string>().Should().BeEquivalentTo(new[] { "neg1", "one" });
+    }
+
+    [Fact]
+    public void Join_Int64NegativeIntegers_WorksCorrectly()
+    {
+        var left = new DataFrame(
+            Series.FromValues("a", new long[] { -9_000_000_000L, -1, 0, 1, 9_000_000_000L }),
+            Series.FromValues("b", new[] { "min", "neg1", "zero", "one", "max" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("a", new long[] { -9_000_000_000L, 9_000_000_000L }),
+            Series.FromValues("c", new[] { "left", "right" })
+        );
+
+        var result = left.Join(right, "a");
+
+        result.Height.Should().Be(2);
+    }
+
+    // ============================================================================
+    // Join with String Keys Tests
+    // ============================================================================
+
+    [Fact]
+    public void Join_StringKeys_WorksCorrectly()
+    {
+        var left = new DataFrame(
+            Series.FromValues("key", new[] { "apple", "banana", "cherry" }),
+            Series.FromValues("value", new[] { 1, 2, 3 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("key", new[] { "banana", "cherry", "date" }),
+            Series.FromValues("score", new[] { 90, 80, 70 })
+        );
+
+        var result = left.Join(right, "key");
+
+        result.Height.Should().Be(2);
+        result["key"].ToArray<string>().Should().BeEquivalentTo(new[] { "banana", "cherry" });
+    }
+
+    [Fact]
+    public void Join_CaseSensitiveStringKeys_RespectsCase()
+    {
+        var left = new DataFrame(
+            Series.FromValues("key", new[] { "Apple", "BANANA", "cherry" }),
+            Series.FromValues("value", new[] { 1, 2, 3 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("key", new[] { "apple", "banana", "cherry" }),
+            Series.FromValues("score", new[] { 90, 80, 70 })
+        );
+
+        var result = left.Join(right, "key");
+
+        result.Height.Should().Be(1); // Only "cherry" matches
+        result["key"][0].AsString().Should().Be("cherry");
+    }
+
+    // ============================================================================
+    // Join with Float Keys Tests
+    // ============================================================================
+
+    [Fact]
+    public void Join_Float64Keys_WorksCorrectly()
+    {
+        var left = new DataFrame(
+            Series.FromValues("key", new[] { 1.0, 2.0, 3.0 }),
+            Series.FromValues("value", new[] { "a", "b", "c" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("key", new[] { 2.0, 3.0, 4.0 }),
+            Series.FromValues("score", new[] { 100, 200, 300 })
+        );
+
+        var result = left.Join(right, "key");
+
+        result.Height.Should().Be(2);
+    }
+
+    // ============================================================================
+    // Multiple Key Join Tests (Additional)
+    // ============================================================================
+
+    [Fact]
+    public void Join_ThreeKeys_WorksCorrectly()
+    {
+        var left = new DataFrame(
+            Series.FromValues("k1", new[] { 1, 1, 2, 2 }),
+            Series.FromValues("k2", new[] { "a", "b", "a", "b" }),
+            Series.FromValues("k3", new[] { true, true, false, false }),
+            Series.FromValues("value", new[] { 10, 20, 30, 40 })
+        );
+        var right = new DataFrame(
+            Series.FromValues("k1", new[] { 1, 2 }),
+            Series.FromValues("k2", new[] { "a", "b" }),
+            Series.FromValues("k3", new[] { true, false }),
+            Series.FromValues("score", new[] { 100, 200 })
+        );
+
+        var result = left.Join(right, new[] { "k1", "k2", "k3" }, new[] { "k1", "k2", "k3" });
+
+        result.Height.Should().Be(2);
+    }
+
+    // ============================================================================
+    // Self Join Tests
+    // ============================================================================
+
+    [Fact]
+    public void SelfJoin_WorksCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("id", new[] { 1, 2, 3 }),
+            Series.FromValues("parent_id", new[] { 0, 1, 1 }),
+            Series.FromValues("name", new[] { "root", "child1", "child2" })
+        );
+
+        // Join to find parent names
+        var result = df.Join(
+            df.Select("id", "name").Rename(new Dictionary<string, string> { { "name", "parent_name" } }),
+            new[] { "parent_id" },
+            new[] { "id" }
+        );
+
+        // Should match parent_id=1 to id=1
+        result.Height.Should().BeGreaterOrEqualTo(2);
+    }
+
+    // ============================================================================
+    // Large Data Join Tests
+    // ============================================================================
+
+    [Fact]
+    public void Join_LargeDataFrame_WorksCorrectly()
+    {
+        var size = 10000;
+        var left = new DataFrame(
+            Series.FromValues("id", Enumerable.Range(0, size).ToArray()),
+            Series.FromValues("value", Enumerable.Range(0, size).Select(x => (double)x).ToArray())
+        );
+        var right = new DataFrame(
+            Series.FromValues("id", Enumerable.Range(size / 2, size / 2).ToArray()), // Half overlap
+            Series.FromValues("score", Enumerable.Range(0, size / 2).Select(x => x * 10).ToArray())
+        );
+
+        var result = left.Join(right, "id");
+
+        result.Height.Should().Be(size / 2);
+    }
+
+    // ============================================================================
+    // Join Order Preservation Tests
+    // ============================================================================
+
+    [Fact]
+    public void InnerJoin_PreservesLeftOrder()
+    {
+        var left = new DataFrame(
+            Series.FromValues("id", new[] { 3, 1, 2 }),
+            Series.FromValues("name", new[] { "three", "one", "two" })
+        );
+        var right = new DataFrame(
+            Series.FromValues("id", new[] { 1, 2, 3 }),
+            Series.FromValues("value", new[] { 100, 200, 300 })
+        );
+
+        var result = left.Join(right, "id");
+
+        // Result should maintain left table order: 3, 1, 2
+        result["id"][0].AsInt32().Should().Be(3);
+        result["id"][1].AsInt32().Should().Be(1);
+        result["id"][2].AsInt32().Should().Be(2);
     }
 }

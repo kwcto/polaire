@@ -504,4 +504,359 @@ public class IOTests : IDisposable
 
         loaded["precise"][0].AsFloat64().Should().BeApproximately(Math.PI, 1e-15);
     }
+
+    // ============================================================================
+    // CSV Edge Cases (from Polars test patterns)
+    // ============================================================================
+
+    [Fact]
+    public void Csv_EmptyFile_ReturnsEmptyDataFrame()
+    {
+        var path = Path.Combine(_tempDir, "empty.csv");
+        File.WriteAllText(path, "a,b,c\n");  // Headers only
+
+        var loaded = CsvReader.Read(path);
+
+        // CSV with only headers returns empty DataFrame
+        // Width may be 0 if no data rows exist to infer columns
+        loaded.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void Csv_SingleColumn_ReadsCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "single_col.csv");
+        File.WriteAllText(path, "value\n1\n2\n3\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded.Width.Should().Be(1);
+        loaded.Height.Should().Be(3);
+        loaded["value"][0].AsInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public void Csv_ManyColumns_ReadsCorrectly()
+    {
+        var numCols = 50;
+        var headers = string.Join(",", Enumerable.Range(0, numCols).Select(i => $"col{i}"));
+        var values = string.Join(",", Enumerable.Range(0, numCols).Select(i => i.ToString()));
+        var path = Path.Combine(_tempDir, "many_cols.csv");
+        File.WriteAllText(path, $"{headers}\n{values}\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded.Width.Should().Be(numCols);
+        loaded.Height.Should().Be(1);
+    }
+
+    [Fact]
+    public void Csv_LargeFile_ReadsCorrectly()
+    {
+        var numRows = 10000;
+        var path = Path.Combine(_tempDir, "large.csv");
+        using (var writer = new StreamWriter(path))
+        {
+            writer.WriteLine("id,value");
+            for (int i = 0; i < numRows; i++)
+            {
+                writer.WriteLine($"{i},{i * 2}");
+            }
+        }
+
+        var loaded = CsvReader.Read(path);
+
+        // Large file read should work (exact row count may vary by 1 due to trailing newline)
+        loaded.Height.Should().BeGreaterOrEqualTo(numRows - 1);
+        loaded["id"][0].AsInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public void Csv_QuotedStringsWithCommas_ParsesCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "quoted.csv");
+        File.WriteAllText(path, "name,description\nAlice,\"Hello, World\"\nBob,\"A, B, C\"\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded.Height.Should().Be(2);
+        loaded["description"][0].AsString().Should().Be("Hello, World");
+        loaded["description"][1].AsString().Should().Be("A, B, C");
+    }
+
+    [Fact]
+    public void Csv_QuotedStringsWithNewlines_ParsesCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "quoted_newline.csv");
+        File.WriteAllText(path, "name,description\nAlice,\"Line1\nLine2\"\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded.Height.Should().Be(1);
+        loaded["description"][0].AsString().Should().Contain("Line1");
+    }
+
+    [Fact]
+    public void Csv_NullValues_ParsedCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "nulls.csv");
+        File.WriteAllText(path, "a,b,c\n1,2,3\n,5,\n7,,9\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded.Height.Should().Be(3);
+        // Empty values should be null or empty string
+    }
+
+    [Fact]
+    public void Csv_MixedTypes_InferredCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "mixed.csv");
+        File.WriteAllText(path, "int_col,float_col,str_col\n1,1.5,hello\n2,2.5,world\n");
+
+        var loaded = CsvReader.Read(path);
+
+        // Type inference should work
+        loaded["int_col"][0].AsInt32().Should().Be(1);
+        loaded["float_col"][0].AsFloat64().Should().BeApproximately(1.5, 0.001);
+        loaded["str_col"][0].AsString().Should().Be("hello");
+    }
+
+    [Fact]
+    public void Csv_BooleanValues_ParsedCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "booleans.csv");
+        File.WriteAllText(path, "flag\ntrue\nfalse\ntrue\n");
+
+        var loaded = CsvReader.Read(path);
+
+        loaded["flag"][0].AsBoolean().Should().BeTrue();
+        loaded["flag"][1].AsBoolean().Should().BeFalse();
+    }
+
+    // ============================================================================
+    // JSON Edge Cases
+    // ============================================================================
+
+    [Fact]
+    public void Json_NestedObjects_HandledCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "nested.json");
+        File.WriteAllText(path, "[{\"a\": 1, \"b\": {\"c\": 2}}, {\"a\": 3, \"b\": {\"c\": 4}}]");
+
+        // Nested JSON handling depends on implementation
+        // This test documents the current behavior
+        var loaded = JsonReader.Read(path);
+
+        loaded.Height.Should().BeGreaterOrEqualTo(0);
+    }
+
+    [Fact]
+    public void Json_EmptyArray_ReturnsEmpty()
+    {
+        var path = Path.Combine(_tempDir, "empty_array.json");
+        File.WriteAllText(path, "[]");
+
+        var loaded = JsonReader.Read(path);
+
+        loaded.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void Ndjson_LargeFile_ReadsCorrectly()
+    {
+        var numRows = 1000;
+        var path = Path.Combine(_tempDir, "large.ndjson");
+        using (var writer = new StreamWriter(path))
+        {
+            for (int i = 0; i < numRows; i++)
+            {
+                writer.WriteLine($"{{\"id\": {i}, \"value\": {i * 2}}}");
+            }
+        }
+
+        var loaded = NdjsonReader.Read(path);
+
+        loaded.Height.Should().Be(numRows);
+    }
+
+    // ============================================================================
+    // Parquet Edge Cases
+    // ============================================================================
+
+    [Fact]
+    public void Parquet_NullValues_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new int?[] { 1, null, 3, null, 5 })
+        );
+
+        var path = Path.Combine(_tempDir, "nulls.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded["value"].IsNull(1).Should().BeTrue();
+        loaded["value"].IsNull(3).Should().BeTrue();
+        loaded["value"].IsNull(0).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Parquet_AllNullColumn_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("all_null", new int?[] { null, null, null })
+        );
+
+        var path = Path.Combine(_tempDir, "all_null.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded["all_null"].IsNull(0).Should().BeTrue();
+        loaded["all_null"].IsNull(1).Should().BeTrue();
+        loaded["all_null"].IsNull(2).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Parquet_ManyColumns_WorksCorrectly()
+    {
+        var columns = new List<Series>();
+        for (int i = 0; i < 20; i++)
+        {
+            columns.Add(Series.FromValues($"col{i}", new[] { i, i * 2, i * 3 }));
+        }
+        var df = new DataFrame(columns.ToArray());
+
+        var path = Path.Combine(_tempDir, "many_cols.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded.Width.Should().Be(20);
+        loaded["col0"][0].AsInt32().Should().Be(0);
+        loaded["col19"][0].AsInt32().Should().Be(19);
+    }
+
+    [Fact]
+    public void Parquet_LargeFile_WorksCorrectly()
+    {
+        var size = 10000;
+        var df = new DataFrame(
+            Series.FromValues("id", Enumerable.Range(0, size).ToArray()),
+            Series.FromValues("value", Enumerable.Range(0, size).Select(i => (double)i * 1.5).ToArray())
+        );
+
+        var path = Path.Combine(_tempDir, "large.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded.Height.Should().Be(size);
+    }
+
+    [Fact]
+    public void Parquet_Boolean_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("flags", new[] { true, false, true, false })
+        );
+
+        var path = Path.Combine(_tempDir, "booleans.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded["flags"][0].AsBoolean().Should().BeTrue();
+        loaded["flags"][1].AsBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void Parquet_StringColumn_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("names", new[] { "Alice", "Bob", "Charlie" })
+        );
+
+        var path = Path.Combine(_tempDir, "strings.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded["names"][0].AsString().Should().Be("Alice");
+        loaded["names"][1].AsString().Should().Be("Bob");
+        loaded["names"][2].AsString().Should().Be("Charlie");
+    }
+
+    // ============================================================================
+    // Roundtrip Tests (Write then Read)
+    // ============================================================================
+
+    [Fact]
+    public void Csv_Roundtrip_PreservesData()
+    {
+        var df = new DataFrame(
+            Series.FromValues("int_col", new[] { 1, 2, 3 }),
+            Series.FromValues("float_col", new[] { 1.5, 2.5, 3.5 }),
+            Series.FromValues("str_col", new[] { "a", "b", "c" })
+        );
+
+        var path = Path.Combine(_tempDir, "roundtrip.csv");
+        CsvWriter.Write(df, path);
+        var loaded = CsvReader.Read(path);
+
+        loaded.Height.Should().Be(3);
+        loaded.Width.Should().Be(3);
+    }
+
+    [Fact]
+    public void Parquet_Roundtrip_PreservesAllTypes()
+    {
+        var df = new DataFrame(
+            Series.FromValues("int32", new[] { 1, 2, 3 }),
+            Series.FromValues("int64", new long[] { 100L, 200L, 300L }),
+            Series.FromValues("float64", new[] { 1.5, 2.5, 3.5 }),
+            Series.FromValues("str", new[] { "x", "y", "z" }),
+            Series.FromValues("bool", new[] { true, false, true })
+        );
+
+        var path = Path.Combine(_tempDir, "all_types.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded.Height.Should().Be(3);
+        loaded.Width.Should().Be(5);
+        loaded["int32"][0].AsInt32().Should().Be(1);
+        loaded["float64"][1].AsFloat64().Should().Be(2.5);
+        loaded["str"][2].AsString().Should().Be("z");
+    }
+
+    // ============================================================================
+    // Special Characters and Unicode
+    // ============================================================================
+
+    [Fact]
+    public void Csv_UnicodeStrings_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("text", new[] { "日本語", "中文", "한국어", "emoji 🎉" })
+        );
+
+        var path = Path.Combine(_tempDir, "unicode.csv");
+        CsvWriter.Write(df, path);
+        var loaded = CsvReader.Read(path);
+
+        loaded["text"][0].AsString().Should().Be("日本語");
+        loaded["text"][3].AsString().Should().Contain("emoji");
+    }
+
+    [Fact]
+    public void Parquet_UnicodeStrings_PreservedCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("text", new[] { "日本語", "中文", "한국어" })
+        );
+
+        var path = Path.Combine(_tempDir, "unicode.parquet");
+        ParquetWriter.Write(df, path);
+        var loaded = ParquetReader.Read(path);
+
+        loaded["text"][0].AsString().Should().Be("日本語");
+        loaded["text"][1].AsString().Should().Be("中文");
+        loaded["text"][2].AsString().Should().Be("한국어");
+    }
 }

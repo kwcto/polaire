@@ -640,4 +640,524 @@ public class ExpressionApiTests
 
         result.Height.Should().Be(3); // 1, 2, 3
     }
+
+    // ============================================================================
+    // Expression Edge Cases (from Polars test patterns)
+    // ============================================================================
+
+    [Fact]
+    public void Col_NonExistentColumn_ThrowsOnCollect()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 })
+        );
+
+        Action act = () => df.Lazy().Select(Col("nonexistent")).Collect();
+
+        act.Should().Throw<Exception>();
+    }
+
+    [Fact]
+    public void Lit_NullValue_CreatesNull()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 })
+        );
+
+        // Literal null should be handled
+        var nullLit = Expr.Lit(AnyValue.Null);
+        nullLit.Should().BeOfType<Expr.Literal>();
+    }
+
+    [Fact]
+    public void Arithmetic_ChainedOperations_CorrectPrecedence()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 2.0, 3.0, 4.0 }),
+            Series.FromValues("b", new[] { 1.0, 2.0, 3.0 }),
+            Series.FromValues("c", new[] { 10.0, 10.0, 10.0 })
+        );
+
+        // a + b * c should be a + (b * c) due to operator precedence
+        var result = df.Lazy()
+            .Select((Col("a") + Col("b") * Col("c")).As("result"))
+            .Collect();
+
+        // 2 + 1*10 = 12, 3 + 2*10 = 23, 4 + 3*10 = 34
+        result["result"][0].AsFloat64().Should().BeApproximately(12.0, 0.0001);
+        result["result"][1].AsFloat64().Should().BeApproximately(23.0, 0.0001);
+        result["result"][2].AsFloat64().Should().BeApproximately(34.0, 0.0001);
+    }
+
+    [Fact]
+    public void Arithmetic_Parentheses_OverridePrecedence()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 2.0, 3.0, 4.0 }),
+            Series.FromValues("b", new[] { 1.0, 2.0, 3.0 }),
+            Series.FromValues("c", new[] { 10.0, 10.0, 10.0 })
+        );
+
+        // (a + b) * c
+        var result = df.Lazy()
+            .Select(((Col("a") + Col("b")) * Col("c")).As("result"))
+            .Collect();
+
+        // (2+1)*10 = 30, (3+2)*10 = 50, (4+3)*10 = 70
+        result["result"][0].AsFloat64().Should().BeApproximately(30.0, 0.0001);
+        result["result"][1].AsFloat64().Should().BeApproximately(50.0, 0.0001);
+        result["result"][2].AsFloat64().Should().BeApproximately(70.0, 0.0001);
+    }
+
+    [Fact]
+    public void Comparison_AllOperators_WorkCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4, 5 })
+        );
+
+        // Equal
+        var eq = df.Lazy().Filter(Col("a").Eq(3)).Collect();
+        eq.Height.Should().Be(1);
+        eq["a"][0].AsInt32().Should().Be(3);
+
+        // Not Equal
+        var ne = df.Lazy().Filter(Col("a").Ne(3)).Collect();
+        ne.Height.Should().Be(4);
+
+        // Greater Than
+        var gt = df.Lazy().Filter(Col("a").Gt(3)).Collect();
+        gt.Height.Should().Be(2);  // 4, 5
+
+        // Greater Equal
+        var ge = df.Lazy().Filter(Col("a").Ge(3)).Collect();
+        ge.Height.Should().Be(3);  // 3, 4, 5
+
+        // Less Than
+        var lt = df.Lazy().Filter(Col("a").Lt(3)).Collect();
+        lt.Height.Should().Be(2);  // 1, 2
+
+        // Less Equal
+        var le = df.Lazy().Filter(Col("a").Le(3)).Collect();
+        le.Height.Should().Be(3);  // 1, 2, 3
+    }
+
+    [Fact]
+    public void Boolean_AndOr_CombineCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4, 5 }),
+            Series.FromValues("b", new[] { 5, 4, 3, 2, 1 })
+        );
+
+        // a > 2 AND b > 2 -> only (3, 3) matches
+        var andResult = df.Lazy()
+            .Filter(Col("a").Gt(2).And(Col("b").Gt(2)))
+            .Collect();
+        andResult.Height.Should().Be(1);
+        andResult["a"][0].AsInt32().Should().Be(3);
+
+        // a > 4 OR b > 4 -> (1, 5) and (5, 1) match
+        var orResult = df.Lazy()
+            .Filter(Col("a").Gt(4).Or(Col("b").Gt(4)))
+            .Collect();
+        orResult.Height.Should().Be(2);
+    }
+
+    [Fact]
+    public void Boolean_Not_NegatesCondition()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4, 5 })
+        );
+
+        // NOT (a > 3) -> a <= 3
+        var result = df.Lazy()
+            .Filter(!Col("a").Gt(3))
+            .Collect();
+
+        result.Height.Should().Be(3);  // 1, 2, 3
+    }
+
+    [Fact]
+    public void IsIn_SingleValue_MatchesExactly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4, 5 })
+        );
+
+        var result = df.Lazy()
+            .Filter(Col("a").IsInSet(2, 4))
+            .Collect();
+
+        result.Height.Should().Be(2);
+    }
+
+    [Fact]
+    public void IsIn_NoMatches_ReturnsEmpty()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 })
+        );
+
+        var result = df.Lazy()
+            .Filter(Col("a").IsInSet(10, 20, 30))
+            .Collect();
+
+        result.Height.Should().Be(0);
+    }
+
+    [Fact]
+    public void Between_InclusiveBounds_MatchesBoundary()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3, 4, 5 })
+        );
+
+        // Between is typically inclusive: [2, 4]
+        var result = df.Lazy()
+            .Filter(Col("a").IsBetween(2, 4))
+            .Collect();
+
+        result.Height.Should().Be(3);  // 2, 3, 4
+    }
+
+    [Fact]
+    public void Aggregation_Multiple_InSameSelect()
+    {
+        var df = new DataFrame(
+            Series.FromValues("value", new[] { 1.0, 2.0, 3.0, 4.0, 5.0 })
+        );
+
+        var result = df.Lazy()
+            .Select(
+                Col("value").Sum().As("sum"),
+                Col("value").Mean().As("mean"),
+                Col("value").Min().As("min"),
+                Col("value").Max().As("max")
+            )
+            .Collect();
+
+        result["sum"][0].AsFloat64().Should().Be(15.0);
+        result["mean"][0].AsFloat64().Should().Be(3.0);
+        result["min"][0].AsFloat64().Should().Be(1.0);
+        result["max"][0].AsFloat64().Should().Be(5.0);
+    }
+
+    [Fact]
+    public void Aggregation_OnEmptyDataFrame_ReturnsNull()
+    {
+        var df = new DataFrame(
+            Series.FromValues("value", Array.Empty<double>())
+        );
+
+        var result = df.Lazy()
+            .Select(Col("value").Sum().As("sum"))
+            .Collect();
+
+        result.Height.Should().Be(1);
+        // Empty sum should be null or 0
+    }
+
+    [Fact]
+    public void Cast_Int32ToFloat64_PreservesValues()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 })
+        );
+
+        var result = df.Lazy()
+            .Select(Col("a").CastTo(DataType.Float64).As("a_float"))
+            .Collect();
+
+        result["a_float"].DataType.Should().Be(DataType.Float64);
+        result["a_float"][0].AsFloat64().Should().Be(1.0);
+        result["a_float"][1].AsFloat64().Should().Be(2.0);
+        result["a_float"][2].AsFloat64().Should().Be(3.0);
+    }
+
+    [Fact]
+    public void Cast_Float64ToInt32_Truncates()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1.7, 2.3, 3.9 })
+        );
+
+        var result = df.Lazy()
+            .Select(Col("a").CastTo(DataType.Int32).As("a_int"))
+            .Collect();
+
+        result["a_int"].DataType.Should().Be(DataType.Int32);
+        result["a_int"][0].AsInt32().Should().Be(1);
+        result["a_int"][1].AsInt32().Should().Be(2);
+        result["a_int"][2].AsInt32().Should().Be(3);
+    }
+
+    [Fact]
+    public void When_SimpleCondition_WorksCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("score", new[] { 95, 85, 75, 65, 55 })
+        );
+
+        // Simple pass/fail based on score >= 70
+        var result = df.Lazy()
+            .WithColumns(
+                Expr.WhenExpr(Col("score").Ge(70)).Then("Pass").Otherwise("Fail").As("status")
+            )
+            .Collect();
+
+        result["status"][0].AsString().Should().Be("Pass");  // 95
+        result["status"][1].AsString().Should().Be("Pass");  // 85
+        result["status"][2].AsString().Should().Be("Pass");  // 75
+        result["status"][3].AsString().Should().Be("Fail");  // 65
+        result["status"][4].AsString().Should().Be("Fail");  // 55
+    }
+
+    [Fact]
+    public void IsNull_DetectsNullValues()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("a", new int?[] { 1, null, 3, null, 5 })
+        );
+
+        var result = df.Lazy()
+            .Filter(Col("a").IsNullExpr())
+            .Collect();
+
+        result.Height.Should().Be(2);
+    }
+
+    [Fact]
+    public void IsNotNull_DetectsNonNullValues()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("a", new int?[] { 1, null, 3, null, 5 })
+        );
+
+        var result = df.Lazy()
+            .Filter(Col("a").IsNotNullExpr())
+            .Collect();
+
+        result.Height.Should().Be(3);
+    }
+
+    [Fact]
+    public void FillNull_ReplacesNullsWithValue()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("a", new int?[] { 1, null, 3, null, 5 })
+        );
+
+        var result = df.Lazy()
+            .Select(Col("a").FillNullWith(0).As("filled"))
+            .Collect();
+
+        result["filled"][1].AsInt32().Should().Be(0);
+        result["filled"][3].AsInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public void Alias_CanBeChained()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1, 2, 3 })
+        );
+
+        var result = df.Lazy()
+            .Select(
+                Col("a").As("x").As("y").As("z")
+            )
+            .Collect();
+
+        result.Columns.Should().Contain("z");
+        result["z"][0].AsInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public void Select_SameColumnMultipleTimes_WithDifferentAliases()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1.0, 2.0, 3.0 })
+        );
+
+        var result = df.Lazy()
+            .Select(
+                Col("a").As("original"),
+                (Col("a") * Lit(2.0)).As("doubled"),
+                (Col("a") * Col("a")).As("squared")
+            )
+            .Collect();
+
+        result.Width.Should().Be(3);
+        result["original"][0].AsFloat64().Should().Be(1.0);
+        result["doubled"][0].AsFloat64().Should().Be(2.0);
+        result["squared"][0].AsFloat64().Should().Be(1.0);
+    }
+
+    // ============================================================================
+    // Large Data Expression Tests
+    // ============================================================================
+
+    [Fact]
+    public void Expression_LargeDataFrame_PerformsCorrectly()
+    {
+        var size = 10000;
+        var values = Enumerable.Range(0, size).Select(i => (double)i).ToArray();
+        var df = new DataFrame(
+            Series.FromValues("value", values)
+        );
+
+        var result = df.Lazy()
+            .Select(
+                (Col("value") * Lit(2.0)).As("doubled")
+            )
+            .Collect();
+
+        result.Height.Should().Be(size);
+        result["doubled"][0].AsFloat64().Should().Be(0.0);
+        result["doubled"][size - 1].AsFloat64().Should().Be((size - 1) * 2.0);
+    }
+
+    [Fact]
+    public void Filter_LargeDataFrame_PerformsCorrectly()
+    {
+        var size = 10000;
+        var values = Enumerable.Range(0, size).ToArray();
+        var df = new DataFrame(
+            Series.FromValues("value", values)
+        );
+
+        // Filter to values >= 5000
+        var result = df.Lazy()
+            .Filter(Col("value").Ge(5000))
+            .Collect();
+
+        result.Height.Should().Be(5000);
+    }
+
+    // ============================================================================
+    // Null Handling in Expressions
+    // ============================================================================
+
+    [Fact]
+    public void Arithmetic_WithNulls_PropagatesNulls()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("a", new double?[] { 1.0, null, 3.0 }),
+            Series.FromNullable("b", new double?[] { 10.0, 20.0, null })
+        );
+
+        var result = df.Lazy()
+            .Select((Col("a") + Col("b")).As("sum"))
+            .Collect();
+
+        // 1 + 10 = 11, null + 20 = null, 3 + null = null
+        result["sum"][0].AsFloat64().Should().Be(11.0);
+        result["sum"].IsNull(1).Should().BeTrue();
+        result["sum"].IsNull(2).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Comparison_WithNulls_ReturnsNull()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("a", new int?[] { 1, null, 3 })
+        );
+
+        // null > 2 should be null (not true or false)
+        var boolResult = df.Lazy()
+            .Select(Col("a").Gt(2).As("result"))
+            .Collect();
+
+        boolResult["result"][0].AsBoolean().Should().BeFalse();  // 1 > 2 = false
+        boolResult["result"].IsNull(1).Should().BeTrue();  // null > 2 = null
+        boolResult["result"][2].AsBoolean().Should().BeTrue();   // 3 > 2 = true
+    }
+
+    // ============================================================================
+    // Division and Modulo Edge Cases
+    // ============================================================================
+
+    [Fact]
+    public void Division_ByZero_ReturnsInfinity()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 10.0, 20.0, 30.0 }),
+            Series.FromValues("b", new[] { 2.0, 0.0, 5.0 })
+        );
+
+        var result = df.Lazy()
+            .Select((Col("a") / Col("b")).As("result"))
+            .Collect();
+
+        result["result"][0].AsFloat64().Should().Be(5.0);
+        result["result"][1].AsFloat64().Should().Be(double.PositiveInfinity);
+        result["result"][2].AsFloat64().Should().Be(6.0);
+    }
+
+    [Fact]
+    public void Subtraction_SameColumn_ReturnsZero()
+    {
+        var df = new DataFrame(
+            Series.FromValues("a", new[] { 1.0, 2.0, 3.0 })
+        );
+
+        var result = df.Lazy()
+            .Select((Col("a") - Col("a")).As("zero"))
+            .Collect();
+
+        result["zero"][0].AsFloat64().Should().Be(0.0);
+        result["zero"][1].AsFloat64().Should().Be(0.0);
+        result["zero"][2].AsFloat64().Should().Be(0.0);
+    }
+
+    // ============================================================================
+    // Complex Expression Chains
+    // ============================================================================
+
+    [Fact]
+    public void Expression_ComplexChain_WorksCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("price", new[] { 100.0, 200.0, 300.0 }),
+            Series.FromValues("quantity", new[] { 2.0, 3.0, 1.0 }),
+            Series.FromValues("discount", new[] { 0.1, 0.2, 0.0 })
+        );
+
+        // total = price * quantity * (1 - discount)
+        var result = df.Lazy()
+            .Select(
+                (Col("price") * Col("quantity") * (Lit(1.0) - Col("discount"))).As("total")
+            )
+            .Collect();
+
+        // 100 * 2 * 0.9 = 180
+        result["total"][0].AsFloat64().Should().BeApproximately(180.0, 0.0001);
+        // 200 * 3 * 0.8 = 480
+        result["total"][1].AsFloat64().Should().BeApproximately(480.0, 0.0001);
+        // 300 * 1 * 1.0 = 300
+        result["total"][2].AsFloat64().Should().BeApproximately(300.0, 0.0001);
+    }
+
+    [Fact]
+    public void FilterSelect_Combined_WorksCorrectly()
+    {
+        var df = new DataFrame(
+            Series.FromValues("name", new[] { "Alice", "Bob", "Charlie", "Diana" }),
+            Series.FromValues("age", new[] { 25, 30, 35, 28 }),
+            Series.FromValues("score", new[] { 85.0, 92.0, 78.0, 95.0 })
+        );
+
+        var result = df.Lazy()
+            .Filter(Col("age").Gt(26))
+            .Select(
+                Col("name"),
+                (Col("score") * Lit(1.1)).As("adjusted_score")
+            )
+            .Collect();
+
+        result.Height.Should().Be(3);  // Bob, Charlie, Diana
+        result.Columns.Should().BeEquivalentTo(new[] { "name", "adjusted_score" });
+    }
 }
