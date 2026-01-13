@@ -3,6 +3,7 @@
 
 
 using Polaire.Expressions;
+using Polaire.IO;
 
 namespace Polaire.LazyFrame;
 
@@ -34,6 +35,34 @@ public abstract record LogicalPlan
     public sealed record ScanWithPredicate(DataFrame Df, Expr Predicate) : LogicalPlan
     {
         public override string ToString() => $"Scan(predicate={Predicate})";
+    }
+
+    // ============================================================================
+    // File Source Nodes (Lazy Scanning)
+    // ============================================================================
+
+    /// <summary>Scan a CSV file lazily.</summary>
+    public sealed record ScanCsv(string Path, CsvOptions Options, string[]? Columns, Expr? Predicate) : LogicalPlan
+    {
+        public override string ToString() => $"ScanCsv({System.IO.Path.GetFileName(Path)}" +
+            (Columns is not null ? $", cols=[{string.Join(", ", Columns)}]" : "") +
+            (Predicate is not null ? $", predicate={Predicate}" : "") + ")";
+    }
+
+    /// <summary>Scan a Parquet file lazily.</summary>
+    public sealed record ScanParquet(string Path, ParquetOptions Options, string[]? Columns, Expr? Predicate) : LogicalPlan
+    {
+        public override string ToString() => $"ScanParquet({System.IO.Path.GetFileName(Path)}" +
+            (Columns is not null ? $", cols=[{string.Join(", ", Columns)}]" : "") +
+            (Predicate is not null ? $", predicate={Predicate}" : "") + ")";
+    }
+
+    /// <summary>Scan an NDJSON file lazily.</summary>
+    public sealed record ScanNdjson(string Path, NdjsonOptions Options, string[]? Columns, Expr? Predicate) : LogicalPlan
+    {
+        public override string ToString() => $"ScanNdjson({System.IO.Path.GetFileName(Path)}" +
+            (Columns is not null ? $", cols=[{string.Join(", ", Columns)}]" : "") +
+            (Predicate is not null ? $", predicate={Predicate}" : "") + ")";
     }
 
     // ============================================================================
@@ -188,6 +217,9 @@ public static class PlanPrinter
         LogicalPlan.Scan => Array.Empty<LogicalPlan>(),
         LogicalPlan.ScanWithProjection => Array.Empty<LogicalPlan>(),
         LogicalPlan.ScanWithPredicate => Array.Empty<LogicalPlan>(),
+        LogicalPlan.ScanCsv => Array.Empty<LogicalPlan>(),
+        LogicalPlan.ScanParquet => Array.Empty<LogicalPlan>(),
+        LogicalPlan.ScanNdjson => Array.Empty<LogicalPlan>(),
         LogicalPlan.Select s => new[] { s.Input },
         LogicalPlan.WithColumns w => new[] { w.Input },
         LogicalPlan.Filter f => new[] { f.Input },

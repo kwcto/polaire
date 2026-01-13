@@ -2,6 +2,7 @@
 // Polaire - High-performance DataFrame library for .NET
 
 using Polaire.Expressions;
+using Polaire.IO;
 
 namespace Polaire.LazyFrame;
 
@@ -61,6 +62,21 @@ public static class QueryOptimizer
             // Combine predicate with existing scan predicate
             LogicalPlan.Filter { Input: LogicalPlan.ScanWithPredicate scanPred, Predicate: var pred } =>
                 new LogicalPlan.ScanWithPredicate(scanPred.Df, CombinePredicates(scanPred.Predicate, pred)),
+
+            // Push filter to CSV scan (predicate pushdown to file source)
+            LogicalPlan.Filter { Input: LogicalPlan.ScanCsv scan, Predicate: var pred } =>
+                new LogicalPlan.ScanCsv(scan.Path, scan.Options, scan.Columns,
+                    scan.Predicate is null ? pred : CombinePredicates(scan.Predicate, pred)),
+
+            // Push filter to Parquet scan
+            LogicalPlan.Filter { Input: LogicalPlan.ScanParquet scan, Predicate: var pred } =>
+                new LogicalPlan.ScanParquet(scan.Path, scan.Options, scan.Columns,
+                    scan.Predicate is null ? pred : CombinePredicates(scan.Predicate, pred)),
+
+            // Push filter to NDJSON scan
+            LogicalPlan.Filter { Input: LogicalPlan.ScanNdjson scan, Predicate: var pred } =>
+                new LogicalPlan.ScanNdjson(scan.Path, scan.Options, scan.Columns,
+                    scan.Predicate is null ? pred : CombinePredicates(scan.Predicate, pred)),
 
             // Push filter through join (if predicate only references one side)
             LogicalPlan.Filter { Input: LogicalPlan.Join join, Predicate: var pred }
@@ -138,6 +154,9 @@ public static class QueryOptimizer
         return plan switch
         {
             LogicalPlan.Scan scan => scan.Df.Columns.ToHashSet(),
+            LogicalPlan.ScanCsv scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),
+            LogicalPlan.ScanParquet scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),
+            LogicalPlan.ScanNdjson scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),
             LogicalPlan.Select select =>
                 select.Exprs.SelectMany(GetReferencedColumns).ToHashSet(),
             LogicalPlan.Filter filter =>
@@ -176,6 +195,24 @@ public static class QueryOptimizer
                         requiredColumns.Concat(GetReferencedColumns(scanPred.Predicate)).Distinct().ToArray()),
                     scanPred.Predicate),
 
+            // Push projections to CSV scan
+            LogicalPlan.ScanCsv scan when requiredColumns.Count > 0 =>
+                new LogicalPlan.ScanCsv(scan.Path, scan.Options,
+                    MergeColumns(scan.Columns, requiredColumns, scan.Predicate),
+                    scan.Predicate),
+
+            // Push projections to Parquet scan
+            LogicalPlan.ScanParquet scan when requiredColumns.Count > 0 =>
+                new LogicalPlan.ScanParquet(scan.Path, scan.Options,
+                    MergeColumns(scan.Columns, requiredColumns, scan.Predicate),
+                    scan.Predicate),
+
+            // Push projections to NDJSON scan
+            LogicalPlan.ScanNdjson scan when requiredColumns.Count > 0 =>
+                new LogicalPlan.ScanNdjson(scan.Path, scan.Options,
+                    MergeColumns(scan.Columns, requiredColumns, scan.Predicate),
+                    scan.Predicate),
+
             // Recursively process children
             LogicalPlan.Select s => new LogicalPlan.Select(
                 PushProjections(s.Input, s.Exprs.SelectMany(GetReferencedColumns).ToHashSet()),
@@ -186,6 +223,16 @@ public static class QueryOptimizer
 
             _ => plan
         };
+    }
+
+    private static string[] MergeColumns(string[]? existing, HashSet<string> required, Expr? predicate)
+    {
+        var cols = required.ToHashSet();
+        if (predicate is not null)
+            cols.UnionWith(GetReferencedColumns(predicate));
+        if (existing is not null)
+            cols.IntersectWith(existing);  // Only keep columns that were already allowed
+        return cols.ToArray();
     }
 
     // ============================================================================

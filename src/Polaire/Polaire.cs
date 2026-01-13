@@ -187,16 +187,14 @@ public static class Pl
     /// <summary>Scans a CSV file lazily (enables query optimization).</summary>
     public static LazyFrameType ScanCsv(string path, bool hasHeader = true, char separator = ',')
     {
-        // TODO: Implement true lazy scanning with LogicalPlan.ScanCsv
-        // For now, read eagerly and wrap in LazyFrame
-        return ReadCsv(path, hasHeader, separator).Lazy();
+        var options = new CsvOptions { HasHeader = hasHeader, Separator = separator };
+        return new LazyFrameType(new LogicalPlan.ScanCsv(path, options, null, null));
     }
 
     /// <summary>Scans a CSV file lazily with full options.</summary>
     public static LazyFrameType ScanCsv(string path, CsvOptions options)
     {
-        // TODO: Implement true lazy scanning with LogicalPlan.ScanCsv
-        return ReadCsv(path, options).Lazy();
+        return new LazyFrameType(new LogicalPlan.ScanCsv(path, options, null, null));
     }
 
     // ============================================================================
@@ -210,10 +208,9 @@ public static class Pl
     }
 
     /// <summary>Scans a Parquet file lazily (enables query optimization).</summary>
-    public static LazyFrameType ScanParquet(string path)
+    public static LazyFrameType ScanParquet(string path, ParquetOptions? options = null)
     {
-        // TODO: Implement true lazy scanning with LogicalPlan.ScanParquet
-        return ReadParquet(path).Lazy();
+        return new LazyFrameType(new LogicalPlan.ScanParquet(path, options ?? ParquetOptions.Default, null, null));
     }
 
     // ============================================================================
@@ -233,10 +230,9 @@ public static class Pl
     }
 
     /// <summary>Scans an NDJSON file lazily.</summary>
-    public static LazyFrameType ScanNdjson(string path)
+    public static LazyFrameType ScanNdjson(string path, NdjsonOptions? options = null)
     {
-        // TODO: Implement true lazy scanning
-        return ReadNdjson(path).Lazy();
+        return new LazyFrameType(new LogicalPlan.ScanNdjson(path, options ?? NdjsonOptions.Default, null, null));
     }
 }
 

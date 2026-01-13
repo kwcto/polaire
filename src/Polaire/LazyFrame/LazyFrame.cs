@@ -227,6 +227,11 @@ public sealed class LazyFrame
         return plan switch
         {
             LogicalPlan.Scan scan => scan.Df.Schema,
+            // For file scans, we'd need to read metadata - return empty for now
+            // Full implementation would read file headers/metadata without loading data
+            LogicalPlan.ScanCsv => Array.Empty<(string, DataType)>(),
+            LogicalPlan.ScanParquet => Array.Empty<(string, DataType)>(),
+            LogicalPlan.ScanNdjson => Array.Empty<(string, DataType)>(),
             LogicalPlan.Select select => InferSelectSchema(select),
             LogicalPlan.Filter filter => GetSchema(filter.Input),
             LogicalPlan.Sort sort => GetSchema(sort.Input),

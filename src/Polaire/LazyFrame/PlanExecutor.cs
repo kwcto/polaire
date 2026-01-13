@@ -4,6 +4,7 @@
 
 using Polaire.Expressions;
 using Polaire.Compute;
+using Polaire.IO;
 
 
 namespace Polaire.LazyFrame;
@@ -21,6 +22,9 @@ public static class PlanExecutor
             LogicalPlan.Scan scan => scan.Df,
             LogicalPlan.ScanWithProjection scanProj => ExecuteScanWithProjection(scanProj),
             LogicalPlan.ScanWithPredicate scanPred => ExecuteScanWithPredicate(scanPred),
+            LogicalPlan.ScanCsv scanCsv => ExecuteScanCsv(scanCsv),
+            LogicalPlan.ScanParquet scanParquet => ExecuteScanParquet(scanParquet),
+            LogicalPlan.ScanNdjson scanNdjson => ExecuteScanNdjson(scanNdjson),
             LogicalPlan.Select select => ExecuteSelect(select),
             LogicalPlan.WithColumns withCols => ExecuteWithColumns(withCols),
             LogicalPlan.Filter filter => ExecuteFilter(filter),
@@ -53,6 +57,100 @@ public static class PlanExecutor
     {
         var mask = ExprEvaluator.Evaluate(plan.Predicate, plan.Df);
         return plan.Df.Filter(mask);
+    }
+
+    // ============================================================================
+    // File Scan Operations
+    // ============================================================================
+
+    private static DataFrame ExecuteScanCsv(LogicalPlan.ScanCsv plan)
+    {
+        // Apply column projection at read time
+        var options = plan.Options;
+        if (plan.Columns is not null)
+        {
+            options = new CsvOptions
+            {
+                HasHeader = options.HasHeader,
+                Separator = options.Separator,
+                QuoteChar = options.QuoteChar,
+                InferSchemaRows = options.InferSchemaRows,
+                Schema = options.Schema,
+                BatchSize = options.BatchSize,
+                ChunkSizeBytes = options.ChunkSizeBytes,
+                Columns = plan.Columns,  // Push projection to reader
+                NRows = options.NRows,
+                SkipRows = options.SkipRows,
+                NullValues = options.NullValues,
+                CommentChar = options.CommentChar,
+                Encoding = options.Encoding,
+                TryParseDates = options.TryParseDates,
+                NumThreads = options.NumThreads
+            };
+        }
+
+        var df = CsvReader.Read(plan.Path, options);
+
+        // Apply predicate if present
+        if (plan.Predicate is not null)
+        {
+            var mask = ExprEvaluator.Evaluate(plan.Predicate, df);
+            df = df.Filter(mask);
+        }
+
+        return df;
+    }
+
+    private static DataFrame ExecuteScanParquet(LogicalPlan.ScanParquet plan)
+    {
+        // Apply column projection at read time
+        var options = plan.Options;
+        if (plan.Columns is not null)
+        {
+            options = new ParquetOptions
+            {
+                Columns = plan.Columns  // Push projection to reader
+            };
+        }
+
+        var df = ParquetReader.Read(plan.Path, options);
+
+        // Apply predicate if present
+        if (plan.Predicate is not null)
+        {
+            var mask = ExprEvaluator.Evaluate(plan.Predicate, df);
+            df = df.Filter(mask);
+        }
+
+        return df;
+    }
+
+    private static DataFrame ExecuteScanNdjson(LogicalPlan.ScanNdjson plan)
+    {
+        // Apply column projection at read time
+        var options = plan.Options;
+        if (plan.Columns is not null)
+        {
+            options = new NdjsonOptions
+            {
+                InferSchemaRows = options.InferSchemaRows,
+                Columns = plan.Columns,  // Push projection to reader
+                BatchSize = options.BatchSize,
+                Encoding = options.Encoding,
+                NumThreads = options.NumThreads
+            };
+        }
+
+        var df = NdjsonReader.Read(plan.Path, options);
+
+        // Apply predicate if present
+        if (plan.Predicate is not null)
+        {
+            var mask = ExprEvaluator.Evaluate(plan.Predicate, df);
+            df = df.Filter(mask);
+        }
+
+        return df;
     }
 
     // ============================================================================
