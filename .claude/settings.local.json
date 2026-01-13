@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(dotnet:*)",
+      "Bash(git checkout -- src/Polaire/Compute/)",
+      "Bash(git checkout -- .)",
+      "Bash(find:*)",
+      "Bash(./install.sh:*)",
+      "Bash(ralph --help:*)"
+    ]
+  }
+}
