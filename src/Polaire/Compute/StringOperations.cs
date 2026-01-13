@@ -289,7 +289,7 @@ public sealed class StringOperations
             }
             else
             {
-                var parts = allSeries.Select(s => s[i].ToString()).ToArray();
+                var parts = allSeries.Select(s => s[i].AsString()).ToArray();
                 builder.Append(string.Concat(parts));
             }
         }
@@ -323,6 +323,140 @@ public sealed class StringOperations
             var regex = new Regex(pattern, RegexOptions.Compiled);
             return ToInts(s => s is null ? 0 : regex.Matches(s).Count);
         }
+    }
+
+    // ============================================================================
+    // Reverse
+    // ============================================================================
+
+    public Series Reverse()
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            var chars = s.ToCharArray();
+            System.Array.Reverse(chars);
+            return new string(chars);
+        });
+    }
+
+    // ============================================================================
+    // Find/Index Operations
+    // ============================================================================
+
+    public Series Find(string pattern, int start = 0)
+    {
+        return ToInts(s =>
+        {
+            if (s is null) return -1;
+            return s.IndexOf(pattern, start, StringComparison.Ordinal);
+        });
+    }
+
+    public Series FindLast(string pattern)
+    {
+        return ToInts(s =>
+        {
+            if (s is null) return -1;
+            return s.LastIndexOf(pattern, StringComparison.Ordinal);
+        });
+    }
+
+    // ============================================================================
+    // Encode/Decode Operations
+    // ============================================================================
+
+    public Series EncodeBase64()
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+            return Convert.ToBase64String(bytes);
+        });
+    }
+
+    public Series DecodeBase64()
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            try
+            {
+                var bytes = Convert.FromBase64String(s);
+                return System.Text.Encoding.UTF8.GetString(bytes);
+            }
+            catch
+            {
+                return null;
+            }
+        });
+    }
+
+    public Series EncodeHex()
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+            return Convert.ToHexString(bytes).ToLowerInvariant();
+        });
+    }
+
+    public Series DecodeHex()
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            try
+            {
+                var bytes = Convert.FromHexString(s);
+                return System.Text.Encoding.UTF8.GetString(bytes);
+            }
+            catch
+            {
+                return null;
+            }
+        });
+    }
+
+    // ============================================================================
+    // Repeat Operation
+    // ============================================================================
+
+    public Series Repeat(int n)
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            if (n <= 0) return "";
+            return string.Concat(Enumerable.Repeat(s, n));
+        });
+    }
+
+    // ============================================================================
+    // Slice Operation
+    // ============================================================================
+
+    public Series Slice(int start, int? end = null)
+    {
+        return TransformStrings(s =>
+        {
+            if (s is null) return null;
+            int len = s.Length;
+
+            // Handle negative indices like Python
+            int actualStart = start < 0 ? Math.Max(0, len + start) : Math.Min(start, len);
+            int actualEnd = end switch
+            {
+                null => len,
+                < 0 => Math.Max(0, len + end.Value),
+                _ => Math.Min(end.Value, len)
+            };
+
+            if (actualStart >= actualEnd) return "";
+            return s.Substring(actualStart, actualEnd - actualStart);
+        });
     }
 
     // ============================================================================

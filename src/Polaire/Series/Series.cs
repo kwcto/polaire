@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Apache.Arrow;
+using Apache.Arrow.Types;
 using Polaire.Core;
 using Polaire.DataTypes;
 using Polaire.Compute;
@@ -115,7 +116,7 @@ public sealed class Series : IEnumerable<AnyValue>
     {
         var builder = new TimestampArray.Builder(Apache.Arrow.Types.TimeUnit.Nanosecond);
         foreach (var v in values) builder.Append(new DateTimeOffset(v, TimeSpan.Zero));
-        return FromArrowArray(name, builder.Build(), DataType.DateTime(TimeUnit.Nanoseconds));
+        return FromArrowArray(name, builder.Build(), DataType.DateTime(DataTypes.TimeUnit.Nanoseconds));
     }
 
     /// <summary>Creates a series from nullable values.</summary>
@@ -215,7 +216,7 @@ public sealed class Series : IEnumerable<AnyValue>
             if (v.HasValue) builder.Append(new DateTimeOffset(v.Value, TimeSpan.Zero));
             else builder.AppendNull();
         }
-        return FromArrowArray(name, builder.Build(), DataType.DateTime(TimeUnit.Nanoseconds));
+        return FromArrowArray(name, builder.Build(), DataType.DateTime(DataTypes.TimeUnit.Nanoseconds));
     }
 
     /// <summary>Creates a series from an Arrow array.</summary>
@@ -236,9 +237,201 @@ public sealed class Series : IEnumerable<AnyValue>
             DataType.BooleanType => new ChunkedArray<bool>(array, dataType),
             DataType.DateType => new ChunkedArray<int>(array, dataType),
             DataType.DateTimeType => new ChunkedArray<long>(array, dataType),
+            DataType.ListType => new ListChunkedArray(array, dataType),
+            DataType.StructType => new StructChunkedArray(array, dataType),
             _ => new StringChunkedArray(array, dataType)
         };
         return new Series(name, chunked);
+    }
+
+    /// <summary>Creates a list series from arrays of values.</summary>
+    public static Series FromLists(string name, int[][] values)
+    {
+        return FromListsGeneric<int, Int32Array.Builder, Int32Array>(
+            name, values,
+            () => new Int32Array.Builder(),
+            (b, v) => b.Append(v),
+            b => b.Build(),
+            DataType.Int32);
+    }
+
+    /// <summary>Creates a list series from arrays of values.</summary>
+    public static Series FromLists(string name, double[][] values)
+    {
+        return FromListsGeneric<double, DoubleArray.Builder, DoubleArray>(
+            name, values,
+            () => new DoubleArray.Builder(),
+            (b, v) => b.Append(v),
+            b => b.Build(),
+            DataType.Float64);
+    }
+
+    /// <summary>Creates a list series from arrays of strings.</summary>
+    public static Series FromLists(string name, string[][] values)
+    {
+        var listBuilder = new ListArray.Builder(new StringType());
+        var valueBuilder = listBuilder.ValueBuilder as StringArray.Builder;
+
+        foreach (var list in values)
+        {
+            if (list == null)
+            {
+                listBuilder.AppendNull();
+            }
+            else
+            {
+                listBuilder.Append();
+                foreach (var item in list)
+                {
+                    if (item == null)
+                        valueBuilder!.AppendNull();
+                    else
+                        valueBuilder!.Append(item);
+                }
+            }
+        }
+
+        var array = listBuilder.Build();
+        return FromArrowArray(name, array, DataType.List(DataType.String));
+    }
+
+    private static Series FromListsGeneric<T, TBuilder, TArray>(
+        string name,
+        T[][] values,
+        Func<TBuilder> createBuilder,
+        Action<TBuilder, T> appendValue,
+        Func<TBuilder, TArray> buildArray,
+        DataType innerType)
+        where T : struct
+        where TBuilder : class
+        where TArray : IArrowArray
+    {
+        // Build lists using Arrow's ListArray.Builder
+        var arrowType = innerType switch
+        {
+            DataType.Int32Type => new Int32Type() as IArrowType,
+            DataType.Int64Type => new Int64Type(),
+            DataType.Float64Type => new DoubleType(),
+            DataType.Float32Type => new FloatType(),
+            _ => throw new NotSupportedException()
+        };
+
+        var listBuilder = new ListArray.Builder(arrowType);
+
+        foreach (var list in values)
+        {
+            if (list == null)
+            {
+                listBuilder.AppendNull();
+            }
+            else
+            {
+                listBuilder.Append();
+                foreach (var item in list)
+                {
+                    switch (listBuilder.ValueBuilder)
+                    {
+                        case Int32Array.Builder b:
+                            b.Append(Convert.ToInt32(item));
+                            break;
+                        case Int64Array.Builder b:
+                            b.Append(Convert.ToInt64(item));
+                            break;
+                        case DoubleArray.Builder b:
+                            b.Append(Convert.ToDouble(item));
+                            break;
+                        case FloatArray.Builder b:
+                            b.Append(Convert.ToSingle(item));
+                            break;
+                    }
+                }
+            }
+        }
+
+        var array = listBuilder.Build();
+        return FromArrowArray(name, array, DataType.List(innerType));
+    }
+
+    /// <summary>Creates a struct series from a dictionary of column arrays.</summary>
+    public static Series FromStruct(string name, Dictionary<string, Series> fields)
+    {
+        if (fields.Count == 0)
+            throw new ArgumentException("Struct must have at least one field");
+
+        var length = fields.First().Value.Length;
+        if (!fields.All(f => f.Value.Length == length))
+            throw new ArgumentException("All fields must have the same length");
+
+        // Build the struct type
+        var structFields = fields.Select(f =>
+            new DataTypes.Field(f.Key, f.Value.DataType, f.Value.HasNulls)).ToArray();
+        var structType = DataType.Struct(structFields);
+
+        // Build Arrow arrays for each field
+        var fieldArrays = new List<IArrowArray>();
+        foreach (var field in fields.Values)
+        {
+            fieldArrays.Add(GetArrowArrayFromSeries(field));
+        }
+
+        // Create Arrow StructType
+        var arrowFields = fields.Select(f =>
+            new Apache.Arrow.Field(f.Key, GetArrowType(f.Value.DataType), f.Value.HasNulls)).ToList();
+        var arrowStructType = new Apache.Arrow.Types.StructType(arrowFields);
+
+        // Build StructArray
+        var structArray = new StructArray(arrowStructType, length, fieldArrays, ArrowBuffer.Empty);
+        return FromArrowArray(name, structArray, structType);
+    }
+
+    private static IArrowArray GetArrowArrayFromSeries(Series series)
+    {
+        // Extract the Arrow array from the Series
+        var data = series.Data;
+        return data switch
+        {
+            ChunkedArray<int> arr => arr.GetChunk(0),
+            ChunkedArray<long> arr => arr.GetChunk(0),
+            ChunkedArray<double> arr => arr.GetChunk(0),
+            ChunkedArray<float> arr => arr.GetChunk(0),
+            ChunkedArray<bool> arr => arr.GetChunk(0),
+            StringChunkedArray arr => GetStringArrayChunk(arr),
+            _ => throw new NotSupportedException($"Cannot extract Arrow array from {data.DataType}")
+        };
+    }
+
+    private static IArrowArray GetStringArrayChunk(StringChunkedArray arr)
+    {
+        var builder = new StringArray.Builder();
+        for (int i = 0; i < arr.Length; i++)
+        {
+            if (arr.IsNull(i))
+                builder.AppendNull();
+            else
+                builder.Append(arr.GetString(i) ?? "");
+        }
+        return builder.Build();
+    }
+
+    private static Apache.Arrow.Types.IArrowType GetArrowType(DataType dataType)
+    {
+        return dataType switch
+        {
+            DataType.Int8Type => new Int8Type(),
+            DataType.Int16Type => new Int16Type(),
+            DataType.Int32Type => new Int32Type(),
+            DataType.Int64Type => new Int64Type(),
+            DataType.UInt8Type => new UInt8Type(),
+            DataType.UInt16Type => new UInt16Type(),
+            DataType.UInt32Type => new UInt32Type(),
+            DataType.UInt64Type => new UInt64Type(),
+            DataType.Float32Type => new FloatType(),
+            DataType.Float64Type => new DoubleType(),
+            DataType.BooleanType => new BooleanType(),
+            DataType.StringType => new StringType(),
+            DataType.DateType => new Date32Type(),
+            _ => new StringType() // Fallback
+        };
     }
 
     // ============================================================================
@@ -370,6 +563,102 @@ public sealed class Series : IEnumerable<AnyValue>
     public int Count() => Length - NullCount;
     public AnyValue First() => Length > 0 ? this[0] : AnyValue.Null;
     public AnyValue Last() => Length > 0 ? this[Length - 1] : AnyValue.Null;
+    public AnyValue Product() => SeriesAggregations.Product(this);
+    public AnyValue Quantile(double q, string interpolation = "linear") =>
+        SeriesAggregations.Quantile(this, q, interpolation);
+
+    // Cumulative aggregations
+    public Series CumSum() => SeriesAggregations.CumSum(this);
+    public Series CumProd() => SeriesAggregations.CumProd(this);
+    public Series CumMin() => SeriesAggregations.CumMin(this);
+    public Series CumMax() => SeriesAggregations.CumMax(this);
+
+    // Transformations returning Series
+    public Series Shift(int periods = 1) => SeriesAggregations.Shift(this, periods);
+    public Series Diff(int n = 1) => SeriesAggregations.Diff(this, n);
+    public Series PctChange(int n = 1) => SeriesAggregations.PctChange(this, n);
+    public Series Clip(double? lower, double? upper) => SeriesAggregations.Clip(this, lower, upper);
+    public Series Abs() => SeriesAggregations.Abs(this);
+
+    // Math functions
+    public Series Sqrt() => SeriesAggregations.Sqrt(this);
+    public Series Log() => SeriesAggregations.Log(this);
+    public Series Log10() => SeriesAggregations.Log10(this);
+    public Series Exp() => SeriesAggregations.Exp(this);
+    public Series Sin() => SeriesAggregations.Sin(this);
+    public Series Cos() => SeriesAggregations.Cos(this);
+    public Series Tan() => SeriesAggregations.Tan(this);
+    public Series Floor() => SeriesAggregations.Floor(this);
+    public Series Ceil() => SeriesAggregations.Ceil(this);
+    public Series Round() => SeriesAggregations.Round(this);
+    public Series Round(int decimals) => SeriesAggregations.Round(this, decimals);
+    public Series Sign() => SeriesAggregations.Sign(this);
+
+    // Rolling window operations
+    public Series RollingSum(int windowSize, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingSum(this, windowSize, minPeriods, center);
+    public Series RollingMean(int windowSize, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingMean(this, windowSize, minPeriods, center);
+    public Series RollingMin(int windowSize, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingMin(this, windowSize, minPeriods, center);
+    public Series RollingMax(int windowSize, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingMax(this, windowSize, minPeriods, center);
+    public Series RollingStd(int windowSize, int minPeriods = 1, int ddof = 1, bool center = false) =>
+        RollingOperations.RollingStd(this, windowSize, minPeriods, ddof, center);
+    public Series RollingVar(int windowSize, int minPeriods = 1, int ddof = 1, bool center = false) =>
+        RollingOperations.RollingVar(this, windowSize, minPeriods, ddof, center);
+    public Series RollingMedian(int windowSize, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingMedian(this, windowSize, minPeriods, center);
+    public Series RollingQuantile(double quantile, int windowSize, int minPeriods = 1, string interpolation = "linear", bool center = false) =>
+        RollingOperations.RollingQuantile(this, quantile, windowSize, minPeriods, interpolation, center);
+    public Series RollingApply(int windowSize, Func<double[], double?> func, int minPeriods = 1, bool center = false) =>
+        RollingOperations.RollingApply(this, windowSize, func, minPeriods, center);
+
+    // Expanding window operations
+    public Series ExpandingSum(int minPeriods = 1) => RollingOperations.ExpandingSum(this, minPeriods);
+    public Series ExpandingMean(int minPeriods = 1) => RollingOperations.ExpandingMean(this, minPeriods);
+    public Series ExpandingMin(int minPeriods = 1) => RollingOperations.ExpandingMin(this, minPeriods);
+    public Series ExpandingMax(int minPeriods = 1) => RollingOperations.ExpandingMax(this, minPeriods);
+    public Series ExpandingStd(int minPeriods = 1, int ddof = 1) => RollingOperations.ExpandingStd(this, minPeriods, ddof);
+
+    // Window operations (rank, row_number, lead/lag, etc.)
+    public Series RowNumber() => WindowOperations.RowNumber(this);
+    public Series Rank(string method = "average", bool descending = false) => WindowOperations.Rank(this, method, descending);
+    public Series DenseRank(bool descending = false) => WindowOperations.DenseRank(this, descending);
+    public Series OrdinalRank(bool descending = false) => WindowOperations.OrdinalRank(this, descending);
+    public Series PercentRank() => WindowOperations.PercentRank(this);
+    public Series Lead(int n = 1, AnyValue? defaultValue = null) => WindowOperations.Lead(this, n, defaultValue);
+    public Series Lag(int n = 1, AnyValue? defaultValue = null) => WindowOperations.Lag(this, n, defaultValue);
+    public Series FirstValue() => WindowOperations.FirstValue(this);
+    public Series LastValue() => WindowOperations.LastValue(this);
+    public Series NthValue(int n) => WindowOperations.NthValue(this, n);
+    public Series CumCount() => WindowOperations.CumCount(this);
+    public Series FillForward() => WindowOperations.FillForward(this);
+    public Series FillBackward() => WindowOperations.FillBackward(this);
+    public Series FillInterpolate() => WindowOperations.FillInterpolate(this);
+
+    // Exponentially weighted moving (EWM) operations
+    public Series EwmMean(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        EwmOperations.EwmMean(this, alpha, adjust, ignoreNulls, minPeriods);
+    public Series EwmMeanSpan(double span, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        EwmOperations.EwmMeanSpan(this, span, adjust, ignoreNulls, minPeriods);
+    public Series EwmMeanHalflife(double halflife, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        EwmOperations.EwmMeanHalflife(this, halflife, adjust, ignoreNulls, minPeriods);
+    public Series EwmMeanCom(double com, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        EwmOperations.EwmMeanCom(this, com, adjust, ignoreNulls, minPeriods);
+
+    public Series EwmVar(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 2, bool bias = false) =>
+        EwmOperations.EwmVar(this, alpha, adjust, ignoreNulls, minPeriods, bias);
+    public Series EwmVarSpan(double span, bool adjust = true, bool ignoreNulls = true, int minPeriods = 2, bool bias = false) =>
+        EwmOperations.EwmVarSpan(this, span, adjust, ignoreNulls, minPeriods, bias);
+
+    public Series EwmStd(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 2, bool bias = false) =>
+        EwmOperations.EwmStd(this, alpha, adjust, ignoreNulls, minPeriods, bias);
+    public Series EwmStdSpan(double span, bool adjust = true, bool ignoreNulls = true, int minPeriods = 2, bool bias = false) =>
+        EwmOperations.EwmStdSpan(this, span, adjust, ignoreNulls, minPeriods, bias);
+
+    public Series EwmSum(double alpha, bool ignoreNulls = true, int minPeriods = 1) =>
+        EwmOperations.EwmSum(this, alpha, ignoreNulls, minPeriods);
 
     // ============================================================================
     // Arithmetic Operations
@@ -444,6 +733,20 @@ public sealed class Series : IEnumerable<AnyValue>
 
     private DateTimeOperations? _dt;
     public DateTimeOperations Dt => _dt ??= new DateTimeOperations(this);
+
+    // ============================================================================
+    // List Operations (accessed via .List namespace)
+    // ============================================================================
+
+    private ListOperations? _list;
+    public ListOperations List => _list ??= new ListOperations(this);
+
+    // ============================================================================
+    // Struct Operations (accessed via .Struct namespace)
+    // ============================================================================
+
+    private StructOperations? _struct;
+    public StructOperations Struct => _struct ??= new StructOperations(this);
 
     // ============================================================================
     // Display

@@ -44,6 +44,7 @@ public static class SeriesAggregations
             DataType.UInt64Type => SumUInt64(series),
             DataType.Float32Type => SumFloat32(series),
             DataType.Float64Type => SumFloat64(series),
+            DataType.BooleanType => SumBoolean(series),
             _ => throw new NotSupportedException($"Sum not supported for {series.DataType}")
         };
     }
@@ -226,6 +227,20 @@ public static class SeriesAggregations
                 if (!series.IsNull(i))
                     sum += data.GetValue(i);
             }
+        }
+        return AnyValue.From(sum);
+    }
+
+    private static AnyValue SumBoolean(Series series)
+    {
+        var data = series.Data as ChunkedArray<bool>;
+        if (data is null) return AnyValue.Null;
+
+        long sum = 0;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i) && data.GetValue(i))
+                sum++;
         }
         return AnyValue.From(sum);
     }
@@ -848,6 +863,575 @@ public static class SeriesAggregations
             return AnyValue.Null;
 
         return AnyValue.From(Math.Sqrt(varValue));
+    }
+
+    // ============================================================================
+    // Quantile
+    // ============================================================================
+
+    public static AnyValue Quantile(Series series, double quantile, string interpolation = "linear")
+    {
+        if (series.Length == 0 || series.Count() == 0)
+            return AnyValue.Null;
+
+        if (quantile < 0.0 || quantile > 1.0)
+            throw new ArgumentOutOfRangeException(nameof(quantile), "Quantile must be between 0 and 1");
+
+        // Get non-null values and sort
+        var values = new List<double>();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = series[i];
+                if (val.TryGetDouble(out var d))
+                    values.Add(d);
+                else if (val.TryGetInt64(out var l))
+                    values.Add(l);
+            }
+        }
+
+        if (values.Count == 0)
+            return AnyValue.Null;
+
+        values.Sort();
+
+        // Calculate position
+        double pos = quantile * (values.Count - 1);
+        int lower = (int)Math.Floor(pos);
+        int upper = (int)Math.Ceiling(pos);
+
+        if (lower == upper || interpolation == "lower")
+            return AnyValue.From(values[lower]);
+
+        if (interpolation == "higher")
+            return AnyValue.From(values[upper]);
+
+        if (interpolation == "nearest")
+            return AnyValue.From(pos - lower < upper - pos ? values[lower] : values[upper]);
+
+        if (interpolation == "midpoint")
+            return AnyValue.From((values[lower] + values[upper]) / 2.0);
+
+        // Default: linear interpolation
+        double fraction = pos - lower;
+        return AnyValue.From(values[lower] + fraction * (values[upper] - values[lower]));
+    }
+
+    // ============================================================================
+    // Product
+    // ============================================================================
+
+    public static AnyValue Product(Series series)
+    {
+        if (series.Length == 0 || series.Count() == 0)
+            return AnyValue.Null;
+
+        return series.DataType switch
+        {
+            DataType.Int32Type => ProductInt32(series),
+            DataType.Int64Type => ProductInt64(series),
+            DataType.Float32Type => ProductFloat(series),
+            DataType.Float64Type => ProductFloat(series),
+            _ => throw new NotSupportedException($"Product not supported for {series.DataType}")
+        };
+    }
+
+    private static AnyValue ProductInt32(Series series)
+    {
+        var data = series.Data as ChunkedArray<int>;
+        if (data is null) return AnyValue.Null;
+
+        long product = 1;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+                product *= data.GetValue(i);
+        }
+        return AnyValue.From(product);
+    }
+
+    private static AnyValue ProductInt64(Series series)
+    {
+        var data = series.Data as ChunkedArray<long>;
+        if (data is null) return AnyValue.Null;
+
+        long product = 1;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+                product *= data.GetValue(i);
+        }
+        return AnyValue.From(product);
+    }
+
+    private static AnyValue ProductFloat(Series series)
+    {
+        double product = 1.0;
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (!series.IsNull(i))
+            {
+                var val = series[i];
+                if (val.TryGetDouble(out var d))
+                    product *= d;
+            }
+        }
+        return AnyValue.From(product);
+    }
+
+    // ============================================================================
+    // Cumulative Operations
+    // ============================================================================
+
+    public static Series CumSum(Series series)
+    {
+        return CumulativeOp(series, (acc, val) => acc + val, 0.0);
+    }
+
+    public static Series CumProd(Series series)
+    {
+        return CumulativeOp(series, (acc, val) => acc * val, 1.0);
+    }
+
+    public static Series CumMin(Series series)
+    {
+        return CumulativeOp(series, Math.Min, double.PositiveInfinity);
+    }
+
+    public static Series CumMax(Series series)
+    {
+        return CumulativeOp(series, Math.Max, double.NegativeInfinity);
+    }
+
+    private static Series CumulativeOp(Series series, Func<double, double, double> op, double initialValue)
+    {
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+        double accumulator = initialValue;
+        bool started = false;
+
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var val = series[i];
+                double d;
+                if (val.TryGetDouble(out d) || (val.TryGetInt64(out var l) && (d = l) == l))
+                {
+                    if (!started)
+                    {
+                        accumulator = d;
+                        started = true;
+                    }
+                    else
+                    {
+                        accumulator = op(accumulator, d);
+                    }
+                    builder.Append(accumulator);
+                }
+                else
+                {
+                    builder.AppendNull();
+                }
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Shift
+    // ============================================================================
+
+    public static Series Shift(Series series, int periods)
+    {
+        if (periods == 0)
+            return series;
+
+        return series.DataType switch
+        {
+            DataType.Float64Type => ShiftFloat64(series, periods),
+            DataType.Int32Type => ShiftInt32(series, periods),
+            DataType.Int64Type => ShiftInt64(series, periods),
+            _ => ShiftGeneric(series, periods)
+        };
+    }
+
+    private static Series ShiftFloat64(Series series, int periods)
+    {
+        var data = series.Data as ChunkedArray<double>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+        int n = series.Length;
+        int absPeriods = Math.Abs(periods);
+
+        for (int i = 0; i < n; i++)
+        {
+            int sourceIdx = periods > 0 ? i - periods : i - periods;
+            if (sourceIdx < 0 || sourceIdx >= n)
+            {
+                builder.AppendNull();
+            }
+            else if (series.IsNull(sourceIdx))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                builder.Append(data.GetValue(sourceIdx));
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    private static Series ShiftInt32(Series series, int periods)
+    {
+        var data = series.Data as ChunkedArray<int>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.Int32Array.Builder();
+        int n = series.Length;
+
+        for (int i = 0; i < n; i++)
+        {
+            int sourceIdx = i - periods;
+            if (sourceIdx < 0 || sourceIdx >= n)
+            {
+                builder.AppendNull();
+            }
+            else if (series.IsNull(sourceIdx))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                builder.Append(data.GetValue(sourceIdx));
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Int32);
+    }
+
+    private static Series ShiftInt64(Series series, int periods)
+    {
+        var data = series.Data as ChunkedArray<long>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.Int64Array.Builder();
+        int n = series.Length;
+
+        for (int i = 0; i < n; i++)
+        {
+            int sourceIdx = i - periods;
+            if (sourceIdx < 0 || sourceIdx >= n)
+            {
+                builder.AppendNull();
+            }
+            else if (series.IsNull(sourceIdx))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                builder.Append(data.GetValue(sourceIdx));
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Int64);
+    }
+
+    private static Series ShiftGeneric(Series series, int periods)
+    {
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+        int n = series.Length;
+
+        for (int i = 0; i < n; i++)
+        {
+            int sourceIdx = i - periods;
+            if (sourceIdx < 0 || sourceIdx >= n)
+            {
+                builder.AppendNull();
+            }
+            else if (series.IsNull(sourceIdx))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var val = series[sourceIdx];
+                if (val.TryGetDouble(out var d))
+                    builder.Append(d);
+                else if (val.TryGetInt64(out var l))
+                    builder.Append(l);
+                else
+                    builder.AppendNull();
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Diff
+    // ============================================================================
+
+    public static Series Diff(Series series, int n = 1)
+    {
+        if (n < 1)
+            throw new ArgumentOutOfRangeException(nameof(n), "n must be >= 1");
+
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (i < n || series.IsNull(i) || series.IsNull(i - n))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var curr = series[i];
+                var prev = series[i - n];
+
+                double currVal = 0, prevVal = 0;
+                bool hasCurr = curr.TryGetDouble(out currVal) || (curr.TryGetInt64(out var l1) && (currVal = l1) == l1);
+                bool hasPrev = prev.TryGetDouble(out prevVal) || (prev.TryGetInt64(out var l2) && (prevVal = l2) == l2);
+
+                if (hasCurr && hasPrev)
+                    builder.Append(currVal - prevVal);
+                else
+                    builder.AppendNull();
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Percent Change
+    // ============================================================================
+
+    public static Series PctChange(Series series, int n = 1)
+    {
+        if (n < 1)
+            throw new ArgumentOutOfRangeException(nameof(n), "n must be >= 1");
+
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (i < n || series.IsNull(i) || series.IsNull(i - n))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var curr = series[i];
+                var prev = series[i - n];
+
+                double currVal = 0, prevVal = 0;
+                bool hasCurr = curr.TryGetDouble(out currVal) || (curr.TryGetInt64(out var l1) && (currVal = l1) == l1);
+                bool hasPrev = prev.TryGetDouble(out prevVal) || (prev.TryGetInt64(out var l2) && (prevVal = l2) == l2);
+
+                if (hasCurr && hasPrev && prevVal != 0)
+                    builder.Append((currVal - prevVal) / prevVal);
+                else
+                    builder.AppendNull();
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Clip
+    // ============================================================================
+
+    public static Series Clip(Series series, double? lower, double? upper)
+    {
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var val = series[i];
+                double d;
+                if (val.TryGetDouble(out d) || (val.TryGetInt64(out var l) && (d = l) == l))
+                {
+                    if (lower.HasValue && d < lower.Value)
+                        d = lower.Value;
+                    if (upper.HasValue && d > upper.Value)
+                        d = upper.Value;
+                    builder.Append(d);
+                }
+                else
+                {
+                    builder.AppendNull();
+                }
+            }
+        }
+
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Abs
+    // ============================================================================
+
+    public static Series Abs(Series series)
+    {
+        return series.DataType switch
+        {
+            DataType.Int32Type => AbsInt32(series),
+            DataType.Int64Type => AbsInt64(series),
+            DataType.Float32Type => AbsFloat32(series),
+            DataType.Float64Type => AbsFloat64(series),
+            _ => throw new NotSupportedException($"Abs not supported for {series.DataType}")
+        };
+    }
+
+    private static Series AbsInt32(Series series)
+    {
+        var data = series.Data as ChunkedArray<int>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.Int32Array.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+                builder.AppendNull();
+            else
+                builder.Append(Math.Abs(data.GetValue(i)));
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Int32);
+    }
+
+    private static Series AbsInt64(Series series)
+    {
+        var data = series.Data as ChunkedArray<long>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.Int64Array.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+                builder.AppendNull();
+            else
+                builder.Append(Math.Abs(data.GetValue(i)));
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Int64);
+    }
+
+    private static Series AbsFloat32(Series series)
+    {
+        var data = series.Data as ChunkedArray<float>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.FloatArray.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+                builder.AppendNull();
+            else
+                builder.Append(Math.Abs(data.GetValue(i)));
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float32);
+    }
+
+    private static Series AbsFloat64(Series series)
+    {
+        var data = series.Data as ChunkedArray<double>;
+        if (data is null) return series;
+
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+                builder.AppendNull();
+            else
+                builder.Append(Math.Abs(data.GetValue(i)));
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
+    }
+
+    // ============================================================================
+    // Math Functions: Sqrt, Log, Exp, etc.
+    // ============================================================================
+
+    public static Series Sqrt(Series series) => ApplyMathFunc(series, Math.Sqrt);
+    public static Series Log(Series series) => ApplyMathFunc(series, Math.Log);
+    public static Series Log10(Series series) => ApplyMathFunc(series, Math.Log10);
+    public static Series Exp(Series series) => ApplyMathFunc(series, Math.Exp);
+    public static Series Sin(Series series) => ApplyMathFunc(series, Math.Sin);
+    public static Series Cos(Series series) => ApplyMathFunc(series, Math.Cos);
+    public static Series Tan(Series series) => ApplyMathFunc(series, Math.Tan);
+    public static Series Asin(Series series) => ApplyMathFunc(series, Math.Asin);
+    public static Series Acos(Series series) => ApplyMathFunc(series, Math.Acos);
+    public static Series Atan(Series series) => ApplyMathFunc(series, Math.Atan);
+    public static Series Sinh(Series series) => ApplyMathFunc(series, Math.Sinh);
+    public static Series Cosh(Series series) => ApplyMathFunc(series, Math.Cosh);
+    public static Series Tanh(Series series) => ApplyMathFunc(series, Math.Tanh);
+    public static Series Floor(Series series) => ApplyMathFunc(series, Math.Floor);
+    public static Series Ceil(Series series) => ApplyMathFunc(series, Math.Ceiling);
+    public static Series Round(Series series) => ApplyMathFunc(series, x => Math.Round(x));
+    public static Series Round(Series series, int decimals) =>
+        ApplyMathFunc(series, x => Math.Round(x, decimals));
+
+    public static Series Sign(Series series)
+    {
+        var builder = new Apache.Arrow.Int32Array.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var val = series[i];
+                if (val.TryGetDouble(out var d))
+                    builder.Append(Math.Sign(d));
+                else if (val.TryGetInt64(out var l))
+                    builder.Append(Math.Sign(l));
+                else
+                    builder.AppendNull();
+            }
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Int32);
+    }
+
+    private static Series ApplyMathFunc(Series series, Func<double, double> func)
+    {
+        var builder = new Apache.Arrow.DoubleArray.Builder();
+        for (int i = 0; i < series.Length; i++)
+        {
+            if (series.IsNull(i))
+            {
+                builder.AppendNull();
+            }
+            else
+            {
+                var val = series[i];
+                if (val.TryGetDouble(out var d))
+                    builder.Append(func(d));
+                else if (val.TryGetInt64(out var l))
+                    builder.Append(func(l));
+                else
+                    builder.AppendNull();
+            }
+        }
+        return Series.FromArrowArray(series.Name, builder.Build(), DataType.Float64);
     }
 
     // ============================================================================
