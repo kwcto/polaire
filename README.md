@@ -7,7 +7,7 @@
 
 ---
 
-> *"I love C# and I don't want to write Python."*
+> *"I love C# and I feel that it is underrated for exploratory data analysis."*
 
 Polaire brings the power and elegance of Polars to the .NET ecosystem. No more compromises. No more context switching. Just pure, expressive, high-performance data manipulation in the language you love.
 
