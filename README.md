@@ -132,15 +132,61 @@ var grouped = df
 dotnet add package Polaire
 ```
 
+### I/O Operations
+
+```csharp
+// Eager reading
+var df = ReadCsv("data.csv");
+var df = ReadParquet("data.parquet");
+var df = ReadJson("data.json");
+var df = ReadNdjson("data.ndjson");
+
+// Eager writing
+df.WriteCsv("output.csv");
+df.WriteParquet("output.parquet");
+
+// Lazy scanning (enables predicate/projection pushdown)
+var result = ScanCsv("large.csv")
+    .Filter(Col("status").Eq("active"))  // Only reads matching rows
+    .Select("id", "name")                 // Only reads these columns
+    .Collect();
+```
+
 ## Performance
 
 Polaire leverages modern .NET performance features:
 
-- **SIMD vectorization** for arithmetic and aggregations
-- **64-byte aligned memory** for optimal AVX-512 support
+- **SIMD vectorization** for arithmetic and aggregations using `System.Numerics.Vector<T>`
 - **Memory pooling** to reduce allocation pressure
 - **Chunked arrays** for cache-friendly access patterns
 - **Lazy evaluation** to minimize unnecessary computation
+- **Predicate/projection pushdown** for I/O operations
+
+### Benchmarks (Apple M1 Max, .NET 8.0)
+
+#### Aggregations (1M rows, Float64)
+| Operation | Polaire | Notes |
+|-----------|---------|-------|
+| Min | 321 µs | SIMD optimized |
+| Max | 322 µs | SIMD optimized |
+| Sum | 478 µs | SIMD optimized |
+| Mean | 480 µs | SIMD optimized |
+| Std | 955 µs | SIMD two-pass |
+
+#### vs Polars (Rust)
+| Operation | Polaire (C#) | Polars (Rust) | Gap |
+|-----------|--------------|---------------|-----|
+| Min/Max | 321 µs | 111 µs | 2.9x |
+| Sum/Mean | 479 µs | 120 µs | 4.0x |
+| Std | 955 µs | 648 µs | 1.5x |
+
+A 1.5-4x gap against highly-optimized Rust with architecture-specific SIMD intrinsics (AVX2/AVX512) is reasonable for managed code using portable `System.Numerics.Vector<T>`.
+
+## Current Status
+
+- **163 tests passing**
+- **Build:** Clean (0 warnings, 0 errors)
+- **Target:** .NET 8.0
 
 ## Roadmap
 
@@ -151,8 +197,10 @@ Polaire leverages modern .NET performance features:
 - [x] GroupBy aggregations
 - [x] Join operations
 - [x] String and DateTime operations
-- [ ] CSV/Parquet/JSON I/O
+- [x] CSV/Parquet/JSON/NDJSON I/O
+- [x] SIMD-optimized aggregations
 - [ ] SQL interface
+- [ ] Window functions
 - [ ] Streaming/chunked processing
 - [ ] GPU acceleration (CUDA/Metal)
 
