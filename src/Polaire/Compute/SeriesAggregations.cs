@@ -625,6 +625,99 @@ public static class SeriesAggregations
         if (series.Length == 0 || series.Count() <= ddof)
             return AnyValue.Null;
 
+        return series.DataType switch
+        {
+            DataType.Int32Type => VarInt32(series, ddof),
+            DataType.Int64Type => VarInt64(series, ddof),
+            DataType.Float64Type => VarFloat64(series, ddof),
+            _ => VarGeneric(series, ddof)
+        };
+    }
+
+    private static AnyValue VarFloat64(Series series, int ddof)
+    {
+        var data = series.Data as ChunkedArray<double>;
+        if (data is null) return AnyValue.Null;
+
+        if (!series.HasNulls && data.ChunkCount == 1)
+        {
+            // SIMD path: two-pass algorithm
+            var span = data.GetChunkSpan(0);
+            int count = span.Length;
+            if (count <= ddof) return AnyValue.Null;
+
+            // Pass 1: compute mean
+            double sum = SumVectorized(span);
+            double mean = sum / count;
+
+            // Pass 2: compute sum of squared differences
+            double sumSqDiff = SumSquaredDiffVectorized(span, mean);
+
+            return AnyValue.From(sumSqDiff / (count - ddof));
+        }
+        else
+        {
+            // Scalar fallback for nulls/multiple chunks
+            return VarGeneric(series, ddof);
+        }
+    }
+
+    private static AnyValue VarInt32(Series series, int ddof)
+    {
+        var data = series.Data as ChunkedArray<int>;
+        if (data is null) return AnyValue.Null;
+
+        if (!series.HasNulls && data.ChunkCount == 1)
+        {
+            // SIMD path: two-pass algorithm
+            var span = data.GetChunkSpan(0);
+            int count = span.Length;
+            if (count <= ddof) return AnyValue.Null;
+
+            // Pass 1: compute mean using long sum to avoid overflow
+            long sum = SumVectorized(span);
+            double mean = (double)sum / count;
+
+            // Pass 2: compute sum of squared differences
+            double sumSqDiff = SumSquaredDiffVectorized(span, mean);
+
+            return AnyValue.From(sumSqDiff / (count - ddof));
+        }
+        else
+        {
+            return VarGeneric(series, ddof);
+        }
+    }
+
+    private static AnyValue VarInt64(Series series, int ddof)
+    {
+        var data = series.Data as ChunkedArray<long>;
+        if (data is null) return AnyValue.Null;
+
+        if (!series.HasNulls && data.ChunkCount == 1)
+        {
+            // SIMD path: two-pass algorithm
+            var span = data.GetChunkSpan(0);
+            int count = span.Length;
+            if (count <= ddof) return AnyValue.Null;
+
+            // Pass 1: compute mean
+            long sum = SumVectorized(span);
+            double mean = (double)sum / count;
+
+            // Pass 2: compute sum of squared differences
+            double sumSqDiff = SumSquaredDiffVectorized(span, mean);
+
+            return AnyValue.From(sumSqDiff / (count - ddof));
+        }
+        else
+        {
+            return VarGeneric(series, ddof);
+        }
+    }
+
+    private static AnyValue VarGeneric(Series series, int ddof)
+    {
         var mean = Mean(series);
         if (mean.IsNull || !mean.TryGetDouble(out var meanValue))
             return AnyValue.Null;
@@ -751,6 +844,122 @@ public static class SeriesAggregations
 
         for (; i < span.Length; i++)
             sum += span[i];
+
+        return sum;
+    }
+
+    // ============================================================================
+    // Vectorized Sum of Squared Differences (for Variance)
+    // ============================================================================
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double SumSquaredDiffVectorized(ReadOnlySpan<double> span, double mean)
+    {
+        double sum = 0;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            var vMean = new Vector<double>(mean);
+            var vSum = Vector<double>.Zero;
+            var vectorCount = span.Length - (span.Length % Vector<double>.Count);
+
+            for (; i < vectorCount; i += Vector<double>.Count)
+            {
+                var v = new Vector<double>(span.Slice(i));
+                var diff = v - vMean;
+                vSum += diff * diff;
+            }
+
+            // Reduce vector to scalar
+            for (int j = 0; j < Vector<double>.Count; j++)
+                sum += vSum[j];
+        }
+
+        // Scalar remainder
+        for (; i < span.Length; i++)
+        {
+            var diff = span[i] - mean;
+            sum += diff * diff;
+        }
+
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double SumSquaredDiffVectorized(ReadOnlySpan<int> span, double mean)
+    {
+        double sum = 0;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            var vMean = new Vector<double>(mean);
+            var vSum = Vector<double>.Zero;
+            var vectorCount = span.Length - (span.Length % Vector<double>.Count);
+
+            // Allocate temp buffer outside loop
+            Span<double> temp = stackalloc double[Vector<double>.Count];
+
+            for (; i < vectorCount; i += Vector<double>.Count)
+            {
+                // Convert ints to doubles for this chunk
+                for (int k = 0; k < Vector<double>.Count; k++)
+                    temp[k] = span[i + k];
+
+                var v = new Vector<double>(temp);
+                var diff = v - vMean;
+                vSum += diff * diff;
+            }
+
+            for (int j = 0; j < Vector<double>.Count; j++)
+                sum += vSum[j];
+        }
+
+        for (; i < span.Length; i++)
+        {
+            var diff = span[i] - mean;
+            sum += diff * diff;
+        }
+
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static double SumSquaredDiffVectorized(ReadOnlySpan<long> span, double mean)
+    {
+        double sum = 0;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && span.Length >= Vector<double>.Count)
+        {
+            var vMean = new Vector<double>(mean);
+            var vSum = Vector<double>.Zero;
+            var vectorCount = span.Length - (span.Length % Vector<double>.Count);
+
+            // Allocate temp buffer outside loop
+            Span<double> temp = stackalloc double[Vector<double>.Count];
+
+            for (; i < vectorCount; i += Vector<double>.Count)
+            {
+                // Convert longs to doubles for this chunk
+                for (int k = 0; k < Vector<double>.Count; k++)
+                    temp[k] = span[i + k];
+
+                var v = new Vector<double>(temp);
+                var diff = v - vMean;
+                vSum += diff * diff;
+            }
+
+            for (int j = 0; j < Vector<double>.Count; j++)
+                sum += vSum[j];
+        }
+
+        for (; i < span.Length; i++)
+        {
+            var diff = span[i] - mean;
+            sum += diff * diff;
+        }
 
         return sum;
     }
