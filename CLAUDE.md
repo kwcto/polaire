@@ -313,55 +313,386 @@ Run comparison: `source .venv/bin/activate && python benchmarks/polars_compariso
 
 ## Performance Optimization Opportunities
 
-### Quick Wins (Same Patterns)
-These follow the existing intrinsics pattern in `SeriesAggregations.cs`:
-
-1. **Float32 SIMD** (~15 min)
-   - Add `SumFloat32`, `MinFloat32`, `MaxFloat32`, `VarFloat32` with intrinsics paths
-   - Same pattern as Float64, just use `Vector128<float>` (4 elements per vector)
-   - Currently falls back to scalar loop
-
-2. **Other Integer Types** (~30 min)
-   - Int8, Int16, UInt8, UInt16, UInt32, UInt64 not yet intrinsics optimized
-   - May need widening (Int8 → Int32) to avoid overflow in Sum
-
-### Medium Effort, High Impact
-
-3. ~~**Architecture-Specific Intrinsics**~~ ✓ DONE (achieved 3.5x improvement!)
-
-4. **Parallel Aggregations** (~2 hours)
-   - Split large arrays across threads, merge results
-   - Use `Parallel.For` with thread-local accumulators
-   - Threshold: only parallelize above ~100K elements
-   - Watch for false sharing on cache lines
-
-5. **SIMD Filter** (~2 hours)
-   - Vectorized comparison: `Vector.GreaterThan()` returns mask
-   - Use mask to selectively copy matching elements
-   - Current Filter is scalar loop, could be 4-8x faster
-
-### Larger Efforts
-
-6. **SIMD Sort** (1-2 days)
-   - Radix sort for integers (O(n) vs O(n log n))
-   - Vectorized comparison networks for small arrays
-   - Hybrid: SIMD for partitioning in quicksort
-
-7. **Memory Prefetching** (~1 hour)
-   - `Sse.Prefetch*()` hints for upcoming memory access
-   - Useful when traversing large arrays sequentially
-   - Marginal gains on modern CPUs with good prefetchers
-
-8. **Cache-Blocking** (~2 hours)
-   - Process data in L1/L2 cache-sized chunks
-   - Reduces cache misses for multi-pass algorithms (like Var)
-   - Typical block size: 32KB (L1) or 256KB (L2)
-
 ### Priority Order for Maximum Impact
-1. ~~Architecture-specific intrinsics~~ ✓ DONE
-2. Parallel aggregations - scales with core count
-3. SIMD Filter - very common operation
-4. Float32 SIMD - quick win for float32 data
+1. ~~Architecture-specific intrinsics~~ ✓ DONE (3.5x improvement)
+2. **Float32 intrinsics** - Quick win, same pattern (~15 min)
+3. **SIMD Binary Operations** - Add/Sub/Mul/Div use old Vector<T> (~30 min)
+4. **Parallel Aggregations** - Scales with core count (~2 hours)
+5. **SIMD Filter** - Very common operation (~2 hours)
+6. **Integer type intrinsics** - Complete coverage (~1 hour)
+
+---
+
+### 1. Float32 Intrinsics (~15 min) ⭐ QUICK WIN
+
+**Current state:** `SumFloat32`, `MinFloat32`, `MaxFloat32` use scalar loops.
+
+**Implementation:** Same pattern as Float64, but `Vector128<float>` holds 4 elements (vs 2 for double).
+
+```csharp
+// In SeriesAggregations.cs, add new method:
+private static float SumVectorizedFloat32(ReadOnlySpan<float> span)
+{
+    float sum = 0;
+    int i = 0;
+
+    ref float ptr = ref MemoryMarshal.GetReference(span);
+
+    if (AdvSimd.IsSupported && span.Length >= 16)  // 4 vectors × 4 floats = 16
+    {
+        var vSum0 = Vector128<float>.Zero;
+        var vSum1 = Vector128<float>.Zero;
+        var vSum2 = Vector128<float>.Zero;
+        var vSum3 = Vector128<float>.Zero;
+
+        int vectorCount = span.Length - (span.Length % 16);
+
+        for (; i < vectorCount; i += 16)
+        {
+            var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+            var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+            var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 8));
+            var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 12));
+
+            vSum0 = AdvSimd.Add(vSum0, v0);
+            vSum1 = AdvSimd.Add(vSum1, v1);
+            vSum2 = AdvSimd.Add(vSum2, v2);
+            vSum3 = AdvSimd.Add(vSum3, v3);
+        }
+
+        vSum0 = AdvSimd.Add(vSum0, vSum1);
+        vSum2 = AdvSimd.Add(vSum2, vSum3);
+        vSum0 = AdvSimd.Add(vSum0, vSum2);
+
+        // Horizontal sum for float (pairwise twice)
+        var pairwise1 = AdvSimd.Arm64.AddPairwise(vSum0, vSum0);
+        sum = AdvSimd.Arm64.AddPairwiseScalar(pairwise1.GetLower()).ToScalar();
+    }
+    // ... Avx path, fallback, scalar remainder
+}
+```
+
+**Key differences from Float64:**
+- `Vector128<float>` = 4 elements (vs 2 for double)
+- Process 16 elements per iteration (vs 8)
+- Use `AdvSimd.Add` (not `AdvSimd.Arm64.Add` - float version is in base class)
+- Horizontal reduction needs two pairwise operations
+
+**Files to modify:**
+- `src/Polaire/Compute/SeriesAggregations.cs`: Add `SumVectorizedFloat32`, `MinVectorizedFloat32`, `MaxVectorizedFloat32`
+- Update `SumFloat32()`, `MinFloat32()`, `MaxFloat32()` to call vectorized versions
+
+---
+
+### 2. SIMD Binary Operations (~30 min) ⭐ QUICK WIN
+
+**Current state:** `SeriesArithmetic.cs` uses `System.Numerics.Vector<T>` for Add/Sub/Mul/Div.
+
+**Implementation:** Apply same intrinsics pattern to binary operations.
+
+```csharp
+// In SeriesArithmetic.cs
+public static ChunkedArray<double> Add(ChunkedArray<double> left, ChunkedArray<double> right)
+{
+    var result = new double[left.Length];
+    ref double lPtr = ref MemoryMarshal.GetReference(left.GetChunkSpan(0));
+    ref double rPtr = ref MemoryMarshal.GetReference(right.GetChunkSpan(0));
+    ref double outPtr = ref MemoryMarshal.GetReference(result.AsSpan());
+
+    int i = 0;
+    if (AdvSimd.Arm64.IsSupported && left.Length >= 8)
+    {
+        int vectorCount = left.Length - (left.Length % 8);
+        for (; i < vectorCount; i += 8)
+        {
+            var l0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i));
+            var l1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 2));
+            var l2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 4));
+            var l3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref lPtr, i + 6));
+
+            var r0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i));
+            var r1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 2));
+            var r2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 4));
+            var r3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref rPtr, i + 6));
+
+            Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l0, r0), ref Unsafe.Add(ref outPtr, i));
+            Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l1, r1), ref Unsafe.Add(ref outPtr, i + 2));
+            Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l2, r2), ref Unsafe.Add(ref outPtr, i + 4));
+            Vector128.StoreUnsafe(AdvSimd.Arm64.Add(l3, r3), ref Unsafe.Add(ref outPtr, i + 6));
+        }
+    }
+    // scalar remainder...
+}
+```
+
+**Note:** Binary operations are memory-bound (read 2 arrays, write 1), so gains may be smaller than aggregations. Still worth doing for consistency.
+
+**Files to modify:**
+- `src/Polaire/Compute/SeriesArithmetic.cs`
+
+---
+
+### 3. Parallel Aggregations (~2 hours)
+
+**Current state:** All aggregations are single-threaded.
+
+**Implementation:** Split array across threads, each thread uses intrinsics, merge results.
+
+```csharp
+private static double SumParallel(ReadOnlySpan<double> span)
+{
+    const int ParallelThreshold = 100_000;
+    const int ChunkSize = 32_768;  // ~256KB per thread (fits L2 cache)
+
+    if (span.Length < ParallelThreshold)
+        return SumVectorized(span);  // Use single-threaded intrinsics
+
+    int numChunks = (span.Length + ChunkSize - 1) / ChunkSize;
+    var partialSums = new double[numChunks];
+
+    // Need to pin memory for parallel access
+    // Option 1: Copy to array (overhead)
+    // Option 2: Use unsafe pointers
+
+    Parallel.For(0, numChunks, chunkIndex =>
+    {
+        int start = chunkIndex * ChunkSize;
+        int length = Math.Min(ChunkSize, span.Length - start);
+        var chunk = span.Slice(start, length);
+        partialSums[chunkIndex] = SumVectorized(chunk);
+    });
+
+    // Merge (could also be SIMD but usually small)
+    double total = 0;
+    for (int i = 0; i < numChunks; i++)
+        total += partialSums[i];
+
+    return total;
+}
+```
+
+**Challenges:**
+- `ReadOnlySpan<T>` can't be captured in lambda (stack-only)
+- Need to convert to array or use unsafe pointers
+- False sharing: ensure `partialSums` array elements are on different cache lines (pad to 64 bytes)
+
+**Expected gains:** ~4-8x on M1 Max (10 cores) for large arrays (>1M elements).
+
+**Files to modify:**
+- `src/Polaire/Compute/SeriesAggregations.cs`
+
+---
+
+### 4. SIMD Filter (~2 hours)
+
+**Current state:** `DataFrame.Filter()` uses scalar loop to evaluate predicates.
+
+**Implementation:** Vectorized comparison + selective copy.
+
+```csharp
+// Vectorized: series > threshold
+public static bool[] GreaterThanScalar(ReadOnlySpan<double> span, double threshold)
+{
+    var result = new bool[span.Length];
+    ref double ptr = ref MemoryMarshal.GetReference(span);
+    ref byte outPtr = ref Unsafe.As<bool, byte>(ref result[0]);
+
+    int i = 0;
+    if (AdvSimd.Arm64.IsSupported && span.Length >= 8)
+    {
+        var vThreshold = Vector128.Create(threshold);
+        int vectorCount = span.Length - (span.Length % 8);
+
+        for (; i < vectorCount; i += 8)
+        {
+            var v0 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+            var v1 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 2));
+            var v2 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 4));
+            var v3 = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i + 6));
+
+            // Compare returns all 1s or all 0s per element
+            var cmp0 = AdvSimd.Arm64.CompareGreaterThan(v0, vThreshold);
+            var cmp1 = AdvSimd.Arm64.CompareGreaterThan(v1, vThreshold);
+            var cmp2 = AdvSimd.Arm64.CompareGreaterThan(v2, vThreshold);
+            var cmp3 = AdvSimd.Arm64.CompareGreaterThan(v3, vThreshold);
+
+            // Extract to bools (narrow from 64-bit masks to bytes)
+            // This is the tricky part - need to pack results
+            // ...
+        }
+    }
+    // scalar remainder...
+}
+```
+
+**The hard part:** Converting SIMD comparison masks (all 1s/0s per lane) to packed bools efficiently. May need lookup tables or permute instructions.
+
+**Alternative approach:** Instead of creating bool[], create list of matching indices:
+```csharp
+// Collect indices where condition is true
+var indices = new List<int>();
+// ... SIMD comparison, extract set bits to indices
+// Then: result = source.Take(indices)
+```
+
+**Files to modify:**
+- `src/Polaire/Compute/` (new file: `SeriesComparison.cs`)
+- `src/Polaire/DataFrame/DataFrame.cs` (update Filter to use vectorized comparison)
+
+---
+
+### 5. Integer Type Intrinsics (~1 hour)
+
+**Current state:** Only Int32 and Int64 have SIMD paths. Others use scalar loops.
+
+**Implementation:** Add intrinsics for remaining integer types.
+
+| Type | Vector128 Elements | Notes |
+|------|-------------------|-------|
+| Int8/UInt8 | 16 | Widen to Int16/Int32 for Sum to avoid overflow |
+| Int16/UInt16 | 8 | Widen to Int32 for Sum |
+| UInt32 | 4 | Direct, but Sum needs UInt64 accumulator |
+| UInt64 | 2 | Direct, watch for overflow |
+
+**Widening pattern for Int8 Sum:**
+```csharp
+private static long SumVectorizedInt8(ReadOnlySpan<sbyte> span)
+{
+    long sum = 0;
+    int i = 0;
+
+    ref sbyte ptr = ref MemoryMarshal.GetReference(span);
+
+    if (AdvSimd.Arm64.IsSupported && span.Length >= 64)
+    {
+        var vSum = Vector128<long>.Zero;  // Accumulate in 64-bit
+        int vectorCount = span.Length - (span.Length % 64);
+
+        for (; i < vectorCount; i += 64)
+        {
+            // Load 16 bytes
+            var v = Vector128.LoadUnsafe(ref Unsafe.Add(ref ptr, i));
+
+            // Widen: sbyte -> short -> int -> long
+            // AdvSimd has SignExtendWideningLower/Upper for this
+            var wide16_lo = AdvSimd.Arm64.SignExtendWideningLower(v.GetLower());
+            var wide16_hi = AdvSimd.Arm64.SignExtendWideningLower(v.GetUpper());
+
+            // Continue widening to int32, then int64...
+            // This gets complex - may be easier to just sum in int32 and check overflow
+        }
+    }
+    // ...
+}
+```
+
+**Simpler approach:** For small integer types, use Int32 SIMD with periodic overflow checks, or just use the scalar path (small integers are rare in data science).
+
+**Files to modify:**
+- `src/Polaire/Compute/SeriesAggregations.cs`
+
+---
+
+### 6. SIMD Sort (1-2 days) - Advanced
+
+**Current state:** Uses `Array.Sort()` (introsort, O(n log n)).
+
+**Opportunities:**
+1. **Radix sort for integers** - O(n), but only for fixed-size integers
+2. **Vectorized quicksort partition** - SIMD comparison to find pivot position
+3. **Sorting networks for small arrays** - SIMD min/max for optimal small sorts
+
+**Not recommended initially** - Sort is complex and Array.Sort is already highly optimized.
+
+---
+
+### 7. String Operations with SIMD (~4 hours) - Advanced
+
+**Current state:** All string operations are scalar.
+
+**Opportunities:**
+- `Contains`: Use SIMD to scan for first character, then verify
+- `StartsWith`/`EndsWith`: Direct SIMD comparison
+- `ToUpper`/`ToLower`: SIMD range check + case flip
+
+```csharp
+// SIMD ToLower for ASCII
+// Check if char in 'A'-'Z' range, if so add 32
+var chars = Vector128.LoadUnsafe(ref charPtr);
+var isUpper = AdvSimd.And(
+    AdvSimd.CompareGreaterThanOrEqual(chars, Vector128.Create((ushort)'A')),
+    AdvSimd.CompareLessThanOrEqual(chars, Vector128.Create((ushort)'Z'))
+);
+var lowered = AdvSimd.Add(chars, AdvSimd.And(isUpper, Vector128.Create((ushort)32)));
+```
+
+**Files to modify:**
+- `src/Polaire/Series/StringOperations.cs`
+
+---
+
+### 8. Memory Prefetching (~1 hour) - Minor Gains
+
+**Current state:** No explicit prefetching.
+
+**Implementation:**
+```csharp
+if (Sse.IsSupported)
+{
+    // Prefetch next cache line (64 bytes ahead)
+    Sse.Prefetch0(Unsafe.AsPointer(ref Unsafe.Add(ref ptr, i + 64)));
+}
+```
+
+**Expected gains:** Marginal (0-10%) on modern CPUs with good hardware prefetchers. M1 has excellent prefetching.
+
+---
+
+### 9. Cache-Blocking for Multi-Pass Algorithms (~2 hours)
+
+**Current state:** Var/Std does two full passes over the data.
+
+**Implementation:** Process in L2-cache-sized blocks:
+```csharp
+const int BlockSize = 32768;  // 256KB / 8 bytes = 32K doubles
+
+// Instead of: pass1 over all data, then pass2 over all data
+// Do: for each block: pass1, pass2
+
+for (int blockStart = 0; blockStart < span.Length; blockStart += BlockSize)
+{
+    var block = span.Slice(blockStart, Math.Min(BlockSize, span.Length - blockStart));
+
+    // Pass 1: sum for mean (data now in L2 cache)
+    double blockSum = SumVectorized(block);
+
+    // Pass 2: sum squared diff (data still in L2 cache!)
+    double blockSumSqDiff = SumSquaredDiffVectorized(block, mean);
+
+    totalSum += blockSum;
+    totalSumSqDiff += blockSumSqDiff;
+}
+```
+
+**Problem:** Need the global mean for pass 2, but we don't know it until pass 1 completes.
+
+**Solution:** Use Welford's online algorithm (single pass) or accept the cache miss on pass 2.
+
+---
+
+### Summary: Recommended Order for Future Sessions
+
+| Priority | Optimization | Effort | Expected Gain |
+|----------|-------------|--------|---------------|
+| 1 | Float32 intrinsics | 15 min | 3-4x for float data |
+| 2 | SIMD Binary Ops | 30 min | 1.5-2x for arithmetic |
+| 3 | Parallel Aggregations | 2 hours | 4-8x for large arrays |
+| 4 | SIMD Filter | 2 hours | 4-8x for filtering |
+| 5 | Integer intrinsics | 1 hour | 2-3x for int data |
+| 6 | String SIMD | 4 hours | 2-4x for string ops |
+| 7 | Cache-blocking | 2 hours | 10-20% for Var/Std |
+| 8 | Memory prefetching | 1 hour | 0-10% marginal |
+| 9 | SIMD Sort | 1-2 days | Complex, skip for now |
 
 ---
 
