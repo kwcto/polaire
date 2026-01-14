@@ -154,6 +154,8 @@ public static class QueryOptimizer
         return plan switch
         {
             LogicalPlan.Scan scan => scan.Df.Columns.ToHashSet(),
+            LogicalPlan.ScanWithProjection scanProj => scanProj.Columns.ToHashSet(),
+            LogicalPlan.ScanWithPredicate scanPred => scanPred.Df.Columns.ToHashSet(),
             LogicalPlan.ScanCsv scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),
             LogicalPlan.ScanParquet scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),
             LogicalPlan.ScanNdjson scan => scan.Columns?.ToHashSet() ?? new HashSet<string>(),

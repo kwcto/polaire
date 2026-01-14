@@ -276,6 +276,12 @@ public static class PlanExecutor
             _ => throw new NotSupportedException("Group by expression must be a column reference")
         }).ToArray();
 
+        // No GROUP BY - compute aggregations directly on entire DataFrame
+        if (groupCols.Length == 0)
+        {
+            return ExecuteWholeDataFrameAggregation(input, plan.Aggs);
+        }
+
         var groupBy = input.GroupBy(groupCols);
 
         if (plan.Aggs.Length == 0)
@@ -289,22 +295,65 @@ public static class PlanExecutor
 
         foreach (var expr in plan.Aggs)
         {
-            var (colName, aggName, aggFunc, alias) = ExtractAggSpec(expr);
+            var (colName, aggName, aggFunc, alias) = ExtractAggSpec(expr, input);
             aggSpecs.Add((colName, aggName, aggFunc, alias));
         }
 
         return groupBy.Agg(aggSpecs.ToArray());
     }
 
-    private static (string column, string aggName, Func<Series, AnyValue> agg, string? alias) ExtractAggSpec(Expr expr)
+    private static DataFrame ExecuteWholeDataFrameAggregation(DataFrame input, Expr[] aggs)
+    {
+        var columns = new List<Series>();
+
+        foreach (var expr in aggs)
+        {
+            var (colName, aggName, aggFunc, alias) = ExtractAggSpec(expr, input);
+            var resultName = alias ?? $"{colName}_{aggName}";
+
+            // For COUNT(*), use any column; for others, use the specified column
+            var sourceCol = colName == "*" && input.Columns.Count > 0
+                ? input[input.Columns.First()]
+                : input[colName];
+
+            var result = aggFunc(sourceCol);
+            columns.Add(CreateSingleValueSeries(resultName, result));
+        }
+
+        return new DataFrame(columns.ToArray());
+    }
+
+    private static Series CreateSingleValueSeries(string name, AnyValue value)
+    {
+        return value.Kind switch
+        {
+            AnyValueKind.Int32 => Series.FromValues(name, new[] { value.AsInt32() }),
+            AnyValueKind.Int64 => Series.FromValues(name, new[] { value.AsInt64() }),
+            AnyValueKind.Float64 => Series.FromValues(name, new[] { value.AsFloat64() }),
+            AnyValueKind.Float32 => Series.FromValues(name, new[] { value.AsFloat32() }),
+            AnyValueKind.Boolean => Series.FromValues(name, new[] { value.AsBoolean() }),
+            AnyValueKind.String => Series.FromValues(name, new[] { value.AsString() }),
+            _ => Series.FromValues(name, new[] { value.TryGetDouble(out var d) ? d : 0.0 })
+        };
+    }
+
+    private static (string column, string aggName, Func<Series, AnyValue> agg, string? alias) ExtractAggSpec(Expr expr, DataFrame? df = null)
     {
         return expr switch
         {
+            // Plain aggregations
             Expr.Agg { Type: var aggType, Inner: Expr.Column col } =>
                 (col.Name, aggType.ToString().ToLower(), GetAggFunction(aggType), null),
             Expr.Alias { Inner: Expr.Agg { Type: var aggType, Inner: Expr.Column col }, Name: var name } =>
                 (col.Name, aggType.ToString().ToLower(), GetAggFunction(aggType), name),
             Expr.Function { Name: "count" } => ("*", "count", s => AnyValue.From(s.Count()), null),
+            Expr.Alias { Inner: Expr.Function { Name: "count" }, Name: var name } =>
+                ("*", "count", s => AnyValue.From(s.Count()), name),
+
+            // Group-by columns (passed through with "first" aggregation)
+            Expr.Column col => (col.Name, "first", s => s.First(), null),
+            Expr.Alias { Inner: Expr.Column col, Name: var name } => (col.Name, "first", s => s.First(), name),
+
             _ => throw new NotSupportedException($"Cannot extract aggregation from {expr}")
         };
     }

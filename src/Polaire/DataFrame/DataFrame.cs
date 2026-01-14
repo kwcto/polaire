@@ -4,8 +4,8 @@
 using System.Collections;
 using System.Text;
 using Polaire.DataTypes;
-
 using Polaire.Compute;
+using Polaire.Sql;
 
 namespace Polaire;
 
@@ -735,6 +735,28 @@ public sealed class DataFrame : IEnumerable<Series>
     public LazyFrame.LazyFrame Lazy()
     {
         return new LazyFrame.LazyFrame(this);
+    }
+
+    // ============================================================================
+    // SQL Interface
+    // ============================================================================
+
+    /// <summary>
+    /// Execute a SQL query on this DataFrame.
+    /// The DataFrame is referenced as 'self' in the query.
+    /// </summary>
+    /// <param name="query">SQL query string (e.g., "SELECT name, age FROM self WHERE age > 30")</param>
+    /// <returns>DataFrame with query results</returns>
+    /// <example>
+    /// <code>
+    /// var result = df.Sql("SELECT name, salary * 1.1 AS adjusted FROM self WHERE age > 30 ORDER BY name");
+    /// </code>
+    /// </example>
+    public DataFrame Sql(string query)
+    {
+        var ctx = new SqlContext();
+        ctx.Register("self", this);
+        return ctx.Sql(query);
     }
 }
 

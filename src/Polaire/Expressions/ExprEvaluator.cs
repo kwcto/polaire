@@ -145,6 +145,10 @@ public static class ExprEvaluator
         {
             UnaryOperator.Negate => -inner,
             UnaryOperator.Not => inner.Not(),
+            UnaryOperator.Abs => inner.Abs(),
+            UnaryOperator.Sqrt => inner.Sqrt(),
+            UnaryOperator.Log => inner.Log(),
+            UnaryOperator.Exp => inner.Exp(),
             _ => throw new NotSupportedException($"Unary operator not supported: {unop.Op}")
         };
     }

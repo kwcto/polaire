@@ -320,8 +320,32 @@ public readonly struct AnyValue : IEquatable<AnyValue>, IComparable<AnyValue>
         if (_isNull) return 1;
         if (other._isNull) return -1;
 
-        // Different types - compare by kind ordinal
-        if (_kind != other._kind) return _kind.CompareTo(other._kind);
+        // Try numeric coercion for comparable types
+        if (_kind != other._kind)
+        {
+            // Both are signed integers - compare as Int64
+            if (IsSignedIntKind(_kind) && IsSignedIntKind(other._kind))
+                return _intValue.CompareTo(other._intValue);
+
+            // Both are unsigned integers - compare as UInt64
+            if (IsUnsignedIntKind(_kind) && IsUnsignedIntKind(other._kind))
+                return _uintValue.CompareTo(other._uintValue);
+
+            // Both are floats - compare as Float64
+            if (IsFloatKind(_kind) && IsFloatKind(other._kind))
+                return CompareFloats(_floatValue, other._floatValue);
+
+            // Mixed numeric - promote to Float64
+            if (IsNumericKind(_kind) && IsNumericKind(other._kind))
+            {
+                var leftVal = ToFloat64();
+                var rightVal = other.ToFloat64();
+                return CompareFloats(leftVal, rightVal);
+            }
+
+            // Different incompatible types - compare by kind ordinal
+            return _kind.CompareTo(other._kind);
+        }
 
         return _kind switch
         {
@@ -337,6 +361,26 @@ public readonly struct AnyValue : IEquatable<AnyValue>, IComparable<AnyValue>
             _ => 0
         };
     }
+
+    private static bool IsSignedIntKind(AnyValueKind kind) =>
+        kind is AnyValueKind.Int8 or AnyValueKind.Int16 or AnyValueKind.Int32 or AnyValueKind.Int64;
+
+    private static bool IsUnsignedIntKind(AnyValueKind kind) =>
+        kind is AnyValueKind.UInt8 or AnyValueKind.UInt16 or AnyValueKind.UInt32 or AnyValueKind.UInt64;
+
+    private static bool IsFloatKind(AnyValueKind kind) =>
+        kind is AnyValueKind.Float32 or AnyValueKind.Float64;
+
+    private static bool IsNumericKind(AnyValueKind kind) =>
+        IsSignedIntKind(kind) || IsUnsignedIntKind(kind) || IsFloatKind(kind);
+
+    private double ToFloat64() => _kind switch
+    {
+        AnyValueKind.Int8 or AnyValueKind.Int16 or AnyValueKind.Int32 or AnyValueKind.Int64 => _intValue,
+        AnyValueKind.UInt8 or AnyValueKind.UInt16 or AnyValueKind.UInt32 or AnyValueKind.UInt64 => _uintValue,
+        AnyValueKind.Float32 or AnyValueKind.Float64 => _floatValue,
+        _ => double.NaN
+    };
 
     private static int CompareFloats(double a, double b)
     {

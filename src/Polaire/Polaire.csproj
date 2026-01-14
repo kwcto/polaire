@@ -27,7 +27,7 @@
     <!-- Memory pooling and allocation -->
     <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="8.0.11" />
 
-    <!-- SQL parsing -->
-    <PackageReference Include="SqlParser" Version="1.0.2" />
+    <!-- SQL parsing (sqlparser-rs port) -->
+    <PackageReference Include="SqlParserCS" Version="0.6.5" />
   </ItemGroup>
 </Project>
