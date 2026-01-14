@@ -449,4 +449,210 @@ public class WindowExpressionTests
         var window = (Expr.Window)expr;
         window.PartitionBy.Should().HaveCount(1);
     }
+
+    // ============================================================================
+    // New Window Functions (Rank/Interpolate Expression Methods)
+    // ============================================================================
+
+    [Fact]
+    public void Window_RowNumber_ShouldReturn1IndexedRowNumber()
+    {
+        var df = new DataFrame(
+            Series.FromValues("value", new[] { 10.0, 20.0, 30.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").RowNumberExpr().Over().As("row_num"))
+            .Collect();
+
+        result["row_num"][0].AsInt64().Should().Be(1);
+        result["row_num"][1].AsInt64().Should().Be(2);
+        result["row_num"][2].AsInt64().Should().Be(3);
+    }
+
+    [Fact]
+    public void Window_RowNumberOver_ShouldResetPerGroup()
+    {
+        var df = new DataFrame(
+            Series.FromValues("group", new[] { "A", "A", "B", "B", "B" }),
+            Series.FromValues("value", new[] { 1.0, 2.0, 3.0, 4.0, 5.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").RowNumberExpr().Over(Col("group")).As("row_num"))
+            .Collect();
+
+        // Group A: 1, 2
+        // Group B: 1, 2, 3
+        result["row_num"][0].AsInt64().Should().Be(1);
+        result["row_num"][1].AsInt64().Should().Be(2);
+        result["row_num"][2].AsInt64().Should().Be(1);
+        result["row_num"][3].AsInt64().Should().Be(2);
+        result["row_num"][4].AsInt64().Should().Be(3);
+    }
+
+    [Fact]
+    public void Window_OrdinalRank_ShouldReturnUniqueRanks()
+    {
+        var df = new DataFrame(
+            Series.FromValues("value", new[] { 30.0, 10.0, 20.0, 10.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").OrdinalRankExpr().Over().As("ordinal_rank"))
+            .Collect();
+
+        // Values sorted: 10(idx1), 10(idx3), 20(idx2), 30(idx0)
+        // Ordinal ranks for original positions: 30->4, 10->1, 20->3, 10->2
+        result["ordinal_rank"][0].AsFloat64().Should().Be(4.0);
+        result["ordinal_rank"][1].AsFloat64().Should().Be(1.0);
+        result["ordinal_rank"][2].AsFloat64().Should().Be(3.0);
+        result["ordinal_rank"][3].AsFloat64().Should().Be(2.0);
+    }
+
+    [Fact]
+    public void Window_FirstValue_ShouldReturnFirstNonNull()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { null, 10.0, 20.0, 30.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").FirstValueExpr().Over().As("first"))
+            .Collect();
+
+        // First non-null is 10.0
+        result["first"][0].AsFloat64().Should().Be(10.0);
+        result["first"][1].AsFloat64().Should().Be(10.0);
+        result["first"][2].AsFloat64().Should().Be(10.0);
+        result["first"][3].AsFloat64().Should().Be(10.0);
+    }
+
+    [Fact]
+    public void Window_LastValue_ShouldReturnLastNonNull()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { 10.0, 20.0, 30.0, null })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").LastValueExpr().Over().As("last"))
+            .Collect();
+
+        // Last non-null is 30.0
+        result["last"][0].AsFloat64().Should().Be(30.0);
+        result["last"][1].AsFloat64().Should().Be(30.0);
+        result["last"][2].AsFloat64().Should().Be(30.0);
+        result["last"][3].AsFloat64().Should().Be(30.0);
+    }
+
+    [Fact]
+    public void Window_NthValue_ShouldReturnNthNonNull()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { null, 10.0, 20.0, 30.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").NthValueExpr(2).Over().As("second"))
+            .Collect();
+
+        // 2nd non-null is 20.0
+        result["second"][0].AsFloat64().Should().Be(20.0);
+        result["second"][1].AsFloat64().Should().Be(20.0);
+        result["second"][2].AsFloat64().Should().Be(20.0);
+        result["second"][3].AsFloat64().Should().Be(20.0);
+    }
+
+    [Fact]
+    public void Window_FillForward_ShouldFillWithPreviousValue()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { 1.0, null, null, 4.0, null })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").FillForwardExpr().Over().As("filled"))
+            .Collect();
+
+        // 1.0, 1.0, 1.0, 4.0, 4.0
+        result["filled"][0].AsFloat64().Should().Be(1.0);
+        result["filled"][1].AsFloat64().Should().Be(1.0);
+        result["filled"][2].AsFloat64().Should().Be(1.0);
+        result["filled"][3].AsFloat64().Should().Be(4.0);
+        result["filled"][4].AsFloat64().Should().Be(4.0);
+    }
+
+    [Fact]
+    public void Window_FillBackward_ShouldFillWithNextValue()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { null, null, 3.0, null, 5.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").FillBackwardExpr().Over().As("filled"))
+            .Collect();
+
+        // 3.0, 3.0, 3.0, 5.0, 5.0
+        result["filled"][0].AsFloat64().Should().Be(3.0);
+        result["filled"][1].AsFloat64().Should().Be(3.0);
+        result["filled"][2].AsFloat64().Should().Be(3.0);
+        result["filled"][3].AsFloat64().Should().Be(5.0);
+        result["filled"][4].AsFloat64().Should().Be(5.0);
+    }
+
+    [Fact]
+    public void Window_Interpolate_ShouldLinearlyInterpolate()
+    {
+        var df = new DataFrame(
+            Series.FromNullable("value", new double?[] { 0.0, null, null, 3.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").InterpolateExpr().Over().As("interpolated"))
+            .Collect();
+
+        // Linear interpolation: 0.0, 1.0, 2.0, 3.0
+        result["interpolated"][0].AsFloat64().Should().Be(0.0);
+        result["interpolated"][1].AsFloat64().Should().Be(1.0);
+        result["interpolated"][2].AsFloat64().Should().Be(2.0);
+        result["interpolated"][3].AsFloat64().Should().Be(3.0);
+    }
+
+    [Fact]
+    public void Window_FillForwardOver_ShouldFillWithinGroup()
+    {
+        var df = new DataFrame(
+            Series.FromValues("group", new[] { "A", "A", "A", "B", "B" }),
+            Series.FromNullable("value", new double?[] { 1.0, null, 3.0, null, 5.0 })
+        );
+
+        var result = df.Lazy()
+            .WithColumns(Col("value").FillForwardExpr().Over(Col("group")).As("filled"))
+            .Collect();
+
+        // Group A: 1.0, 1.0, 3.0
+        // Group B: null (no previous), 5.0
+        result["filled"][0].AsFloat64().Should().Be(1.0);
+        result["filled"][1].AsFloat64().Should().Be(1.0);
+        result["filled"][2].AsFloat64().Should().Be(3.0);
+        result["filled"].IsNull(3).Should().BeTrue();
+        result["filled"][4].AsFloat64().Should().Be(5.0);
+    }
+
+    [Fact]
+    public void Expr_NewWindowMethods_ShouldCreateCorrectExpressions()
+    {
+        var col = Col("value");
+
+        col.RowNumberExpr().Should().BeOfType<Expr.Function>();
+        col.OrdinalRankExpr().Should().BeOfType<Expr.Function>();
+        col.FirstValueExpr().Should().BeOfType<Expr.Function>();
+        col.LastValueExpr().Should().BeOfType<Expr.Function>();
+        col.NthValueExpr(2).Should().BeOfType<Expr.Function>();
+        col.FillForwardExpr().Should().BeOfType<Expr.Function>();
+        col.FillBackwardExpr().Should().BeOfType<Expr.Function>();
+        col.InterpolateExpr().Should().BeOfType<Expr.Function>();
+    }
 }

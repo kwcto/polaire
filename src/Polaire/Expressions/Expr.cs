@@ -304,6 +304,30 @@ public abstract record Expr
     /// <summary>Percentage change between consecutive values.</summary>
     public Expr PctChangeExpr(int n = 1) => new Function("pct_change", new Expr[] { this, Lit(n) });
 
+    /// <summary>Row number (1-indexed) for each element.</summary>
+    public Expr RowNumberExpr() => new Function("row_number", new Expr[] { this });
+
+    /// <summary>Ordinal rank (unique rank based on position in sorted order).</summary>
+    public Expr OrdinalRankExpr(bool descending = false) => new Function("ordinal_rank", new Expr[] { this, Lit(descending) });
+
+    /// <summary>First non-null value, repeated for all rows.</summary>
+    public Expr FirstValueExpr() => new Function("first_value", new Expr[] { this });
+
+    /// <summary>Last non-null value, repeated for all rows.</summary>
+    public Expr LastValueExpr() => new Function("last_value", new Expr[] { this });
+
+    /// <summary>Nth non-null value (1-indexed), repeated for all rows.</summary>
+    public Expr NthValueExpr(int n) => new Function("nth_value", new Expr[] { this, Lit(n) });
+
+    /// <summary>Fill null values with the previous non-null value (forward fill).</summary>
+    public Expr FillForwardExpr() => new Function("fill_forward", new Expr[] { this });
+
+    /// <summary>Fill null values with the next non-null value (backward fill).</summary>
+    public Expr FillBackwardExpr() => new Function("fill_backward", new Expr[] { this });
+
+    /// <summary>Fill null values by linear interpolation between non-null values.</summary>
+    public Expr InterpolateExpr() => new Function("interpolate", new Expr[] { this });
+
     // ============================================================================
     // Rolling Expression Methods
     // ============================================================================

@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (January 2025)
 
 - **Build:** Passing
-- **Tests:** 2282 passing, 0 failing
+- **Tests:** 2293 passing, 0 failing
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
 - **Lazy Scanning:** Implemented with predicate/projection pushdown
@@ -202,3 +202,4 @@ sum = p2.GetElement(0);
 | 11 | 2242 | Test cleanup, removed tests for unimplemented APIs |
 | 12 | 2264 | Window functions (over clause) implementation |
 | 13 | 2282 | Rolling/Expanding/EWM expression methods |
+| 14 | 2293 | Rank/Interpolate expression methods (RowNumber, OrdinalRank, FillForward, etc.) |
