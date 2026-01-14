@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (January 2025)
 
 - **Build:** Passing
-- **Tests:** 2242 passing, 0 failing
+- **Tests:** 2282 passing, 0 failing
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
 - **Lazy Scanning:** Implemented with predicate/projection pushdown
@@ -93,6 +93,20 @@ df.Rename("old", "new")    // WRONG
 // 10. Series.NullCount - property, not method
 series.NullCount           // Correct
 series.NullCount()         // WRONG
+
+// 11. Window functions - use Over() with Expr methods
+Col("value").Sum().Over(Col("group"))           // Sum per group
+Col("value").RankExpr().Over(Col("group"))      // Rank within group
+Col("value").CumSumExpr().Over(Col("group"))    // Cumulative sum per group
+Col("value").ShiftExpr(1).Over(Col("group"))    // Shift within group
+Col("value").Sum().Over()                       // Entire frame as partition
+
+// 12. Rolling/Expanding/EWM expressions - use LazyFrame.WithColumns
+df.Lazy().WithColumns(Col("value").RollingSumExpr(3).As("rolling"))    // Rolling sum
+df.Lazy().WithColumns(Col("value").RollingMeanExpr(3, center: true))   // Centered mean
+df.Lazy().WithColumns(Col("value").ExpandingSumExpr())                 // Expanding sum
+df.Lazy().WithColumns(Col("value").EwmMeanExpr(0.5).As("ema"))         // EWM mean
+df.Lazy().WithColumns(Col("value").RollingSumExpr(2).Over(Col("g")))   // Per-group rolling
 ```
 
 ## Not Yet Implemented
@@ -102,7 +116,7 @@ series.NullCount()         // WRONG
 - `SumHorizontal`, `MeanHorizontal`
 - `Expr.Slice` method
 - `LazyFrame.Limit` (use `Head` instead)
-- Window functions, SQL interface, GPU acceleration
+- SQL interface, GPU acceleration
 
 ## Critical Bug Fixes
 
@@ -186,3 +200,5 @@ sum = p2.GetElement(0);
 | 9 | 255 | SIMD NaN bug fix, edge case tests |
 | 10 | 1194 | Major test expansion, API pattern documentation |
 | 11 | 2242 | Test cleanup, removed tests for unimplemented APIs |
+| 12 | 2264 | Window functions (over clause) implementation |
+| 13 | 2282 | Rolling/Expanding/EWM expression methods |

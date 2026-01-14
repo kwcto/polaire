@@ -262,6 +262,125 @@ public abstract record Expr
     public Expr ArgMax() => new Agg(AggregationType.ArgMax, this);
 
     // ============================================================================
+    // Window Expression Methods
+    // ============================================================================
+
+    /// <summary>Rank values (average tie-breaking by default).</summary>
+    public Expr RankExpr(string method = "average") => new Function("rank", new Expr[] { this, Lit(method) });
+
+    /// <summary>Dense rank (no gaps in rank values).</summary>
+    public Expr DenseRankExpr() => new Function("dense_rank", new Expr[] { this });
+
+    /// <summary>Percent rank (0 to 1).</summary>
+    public Expr PercentRankExpr() => new Function("percent_rank", new Expr[] { this });
+
+    /// <summary>Shift values by n positions.</summary>
+    public Expr ShiftExpr(int n = 1) => new Function("shift", new Expr[] { this, Lit(n) });
+
+    /// <summary>Access future values (shift backward).</summary>
+    public Expr LeadExpr(int n = 1) => new Function("lead", new Expr[] { this, Lit(n) });
+
+    /// <summary>Access past values (shift forward).</summary>
+    public Expr LagExpr(int n = 1) => new Function("lag", new Expr[] { this, Lit(n) });
+
+    /// <summary>Cumulative sum.</summary>
+    public Expr CumSumExpr() => new Function("cumsum", new Expr[] { this });
+
+    /// <summary>Cumulative minimum.</summary>
+    public Expr CumMinExpr() => new Function("cummin", new Expr[] { this });
+
+    /// <summary>Cumulative maximum.</summary>
+    public Expr CumMaxExpr() => new Function("cummax", new Expr[] { this });
+
+    /// <summary>Cumulative product.</summary>
+    public Expr CumProdExpr() => new Function("cumprod", new Expr[] { this });
+
+    /// <summary>Cumulative count of non-null values.</summary>
+    public Expr CumCountExpr() => new Function("cumcount", new Expr[] { this });
+
+    /// <summary>Difference between consecutive values.</summary>
+    public Expr DiffExpr(int n = 1) => new Function("diff", new Expr[] { this, Lit(n) });
+
+    /// <summary>Percentage change between consecutive values.</summary>
+    public Expr PctChangeExpr(int n = 1) => new Function("pct_change", new Expr[] { this, Lit(n) });
+
+    // ============================================================================
+    // Rolling Expression Methods
+    // ============================================================================
+
+    /// <summary>Rolling sum over a window.</summary>
+    public Expr RollingSumExpr(int windowSize, int minPeriods = 1, bool center = false) =>
+        new Function("rolling_sum", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(center) });
+
+    /// <summary>Rolling mean over a window.</summary>
+    public Expr RollingMeanExpr(int windowSize, int minPeriods = 1, bool center = false) =>
+        new Function("rolling_mean", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(center) });
+
+    /// <summary>Rolling minimum over a window.</summary>
+    public Expr RollingMinExpr(int windowSize, int minPeriods = 1, bool center = false) =>
+        new Function("rolling_min", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(center) });
+
+    /// <summary>Rolling maximum over a window.</summary>
+    public Expr RollingMaxExpr(int windowSize, int minPeriods = 1, bool center = false) =>
+        new Function("rolling_max", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(center) });
+
+    /// <summary>Rolling standard deviation over a window.</summary>
+    public Expr RollingStdExpr(int windowSize, int minPeriods = 1, int ddof = 1, bool center = false) =>
+        new Function("rolling_std", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(ddof), Lit(center) });
+
+    /// <summary>Rolling variance over a window.</summary>
+    public Expr RollingVarExpr(int windowSize, int minPeriods = 1, int ddof = 1, bool center = false) =>
+        new Function("rolling_var", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(ddof), Lit(center) });
+
+    /// <summary>Rolling median over a window.</summary>
+    public Expr RollingMedianExpr(int windowSize, int minPeriods = 1, bool center = false) =>
+        new Function("rolling_median", new Expr[] { this, Lit(windowSize), Lit(minPeriods), Lit(center) });
+
+    // ============================================================================
+    // Expanding Expression Methods
+    // ============================================================================
+
+    /// <summary>Expanding sum from the start of the series.</summary>
+    public Expr ExpandingSumExpr(int minPeriods = 1) =>
+        new Function("expanding_sum", new Expr[] { this, Lit(minPeriods) });
+
+    /// <summary>Expanding mean from the start of the series.</summary>
+    public Expr ExpandingMeanExpr(int minPeriods = 1) =>
+        new Function("expanding_mean", new Expr[] { this, Lit(minPeriods) });
+
+    /// <summary>Expanding minimum from the start of the series.</summary>
+    public Expr ExpandingMinExpr(int minPeriods = 1) =>
+        new Function("expanding_min", new Expr[] { this, Lit(minPeriods) });
+
+    /// <summary>Expanding maximum from the start of the series.</summary>
+    public Expr ExpandingMaxExpr(int minPeriods = 1) =>
+        new Function("expanding_max", new Expr[] { this, Lit(minPeriods) });
+
+    /// <summary>Expanding standard deviation from the start of the series.</summary>
+    public Expr ExpandingStdExpr(int minPeriods = 1, int ddof = 1) =>
+        new Function("expanding_std", new Expr[] { this, Lit(minPeriods), Lit(ddof) });
+
+    // ============================================================================
+    // EWM (Exponentially Weighted Moving) Expression Methods
+    // ============================================================================
+
+    /// <summary>Exponentially weighted moving mean.</summary>
+    public Expr EwmMeanExpr(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        new Function("ewm_mean", new Expr[] { this, Lit(alpha), Lit(adjust), Lit(ignoreNulls), Lit(minPeriods) });
+
+    /// <summary>Exponentially weighted moving standard deviation.</summary>
+    public Expr EwmStdExpr(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        new Function("ewm_std", new Expr[] { this, Lit(alpha), Lit(adjust), Lit(ignoreNulls), Lit(minPeriods) });
+
+    /// <summary>Exponentially weighted moving variance.</summary>
+    public Expr EwmVarExpr(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        new Function("ewm_var", new Expr[] { this, Lit(alpha), Lit(adjust), Lit(ignoreNulls), Lit(minPeriods) });
+
+    /// <summary>Exponentially weighted moving sum.</summary>
+    public Expr EwmSumExpr(double alpha, bool adjust = true, bool ignoreNulls = true, int minPeriods = 1) =>
+        new Function("ewm_sum", new Expr[] { this, Lit(alpha), Lit(adjust), Lit(ignoreNulls), Lit(minPeriods) });
+
+    // ============================================================================
     // Arithmetic Operators
     // ============================================================================
 

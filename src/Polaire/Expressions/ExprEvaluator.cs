@@ -35,6 +35,7 @@ public static class ExprEvaluator
             Expr.Dt dt => EvaluateDt(dt, df),
             Expr.IsIn isIn => EvaluateIsIn(isIn, df),
             Expr.Between between => EvaluateBetween(between, df),
+            Expr.Window window => EvaluateWindow(window, df),
             _ => throw new NotSupportedException($"Expression type not supported: {expr.GetType().Name}")
         };
     }
@@ -276,13 +277,114 @@ public static class ExprEvaluator
 
     private static Series EvaluateFunction(Expr.Function func, DataFrame df)
     {
-        return func.Name.ToLower() switch
+        var funcName = func.Name.ToLower();
+
+        // Handle rolling/expanding/ewm functions
+        if (funcName.StartsWith("rolling_") || funcName.StartsWith("expanding_") || funcName.StartsWith("ewm_"))
+        {
+            return EvaluateRollingOrEwmFunction(func, df);
+        }
+
+        return funcName switch
         {
             "count" => Series.FromValues("count", new[] { df.Height }),
             "row_number" => Series.FromValues("row_number", Enumerable.Range(0, df.Height).ToArray()),
             "arange" when func.Args.Count >= 2 =>
                 EvaluateArange(func.Args[0], func.Args[1], func.Args.Count > 2 ? func.Args[2] : null, df),
             _ => throw new NotSupportedException($"Function not supported: {func.Name}")
+        };
+    }
+
+    private static Series EvaluateRollingOrEwmFunction(Expr.Function func, DataFrame df)
+    {
+        if (func.Args.Count == 0)
+            throw new ArgumentException($"Function {func.Name} requires at least one argument");
+
+        var series = Evaluate(func.Args[0], df);
+        var funcName = func.Name.ToLower();
+
+        return funcName switch
+        {
+            // Rolling operations
+            "rolling_sum" => RollingOperations.RollingSum(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetBoolArg(func, 3, false)),
+
+            "rolling_mean" => RollingOperations.RollingMean(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetBoolArg(func, 3, false)),
+
+            "rolling_min" => RollingOperations.RollingMin(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetBoolArg(func, 3, false)),
+
+            "rolling_max" => RollingOperations.RollingMax(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetBoolArg(func, 3, false)),
+
+            "rolling_std" => RollingOperations.RollingStd(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetIntArg(func, 3, 1),
+                GetBoolArg(func, 4, false)),
+
+            "rolling_var" => RollingOperations.RollingVar(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetIntArg(func, 3, 1),
+                GetBoolArg(func, 4, false)),
+
+            "rolling_median" => RollingOperations.RollingMedian(series,
+                GetIntArg(func, 1, 3),
+                GetIntArg(func, 2, 1),
+                GetBoolArg(func, 3, false)),
+
+            // Expanding operations
+            "expanding_sum" => RollingOperations.ExpandingSum(series,
+                GetIntArg(func, 1, 1)),
+
+            "expanding_mean" => RollingOperations.ExpandingMean(series,
+                GetIntArg(func, 1, 1)),
+
+            "expanding_min" => RollingOperations.ExpandingMin(series,
+                GetIntArg(func, 1, 1)),
+
+            "expanding_max" => RollingOperations.ExpandingMax(series,
+                GetIntArg(func, 1, 1)),
+
+            "expanding_std" => RollingOperations.ExpandingStd(series,
+                GetIntArg(func, 1, 1),
+                GetIntArg(func, 2, 1)),
+
+            // EWM operations
+            "ewm_mean" => EwmOperations.EwmMean(series,
+                GetDoubleArg(func, 1, 0.5),
+                GetBoolArg(func, 2, true),
+                GetBoolArg(func, 3, true),
+                GetIntArg(func, 4, 1)),
+
+            "ewm_std" => EwmOperations.EwmStd(series,
+                GetDoubleArg(func, 1, 0.5),
+                GetBoolArg(func, 2, true),
+                GetBoolArg(func, 3, true),
+                GetIntArg(func, 4, 2)),
+
+            "ewm_var" => EwmOperations.EwmVar(series,
+                GetDoubleArg(func, 1, 0.5),
+                GetBoolArg(func, 2, true),
+                GetBoolArg(func, 3, true),
+                GetIntArg(func, 4, 2)),
+
+            "ewm_sum" => EwmOperations.EwmSum(series,
+                GetDoubleArg(func, 1, 0.5),
+                GetBoolArg(func, 2, true),
+                GetIntArg(func, 3, 1)),
+
+            _ => throw new NotSupportedException($"Rolling/EWM function not supported: {func.Name}")
         };
     }
 
@@ -405,5 +507,232 @@ public static class ExprEvaluator
             DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
             _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
+    }
+
+    // ============================================================================
+    // Window Functions
+    // ============================================================================
+
+    private static Series EvaluateWindow(Expr.Window window, DataFrame df)
+    {
+        if (df.Height == 0)
+            return CreateNullSeries("window_result", 0, DataType.Float64);
+
+        // If no partition-by, treat entire frame as single partition
+        if (window.PartitionBy.Count == 0)
+        {
+            return EvaluateWindowInner(window.Inner, df, null);
+        }
+
+        // Evaluate partition-by expressions to get keys
+        var partitionKeys = window.PartitionBy.Select(e => Evaluate(e, df)).ToArray();
+
+        // Compute partition groups
+        var groups = ComputePartitionGroups(partitionKeys, df.Height);
+
+        // Result array to scatter values into
+        var result = new AnyValue[df.Height];
+        string resultName = "window_result";
+        DataType resultType = DataType.Float64;
+
+        foreach (var (key, indices) in groups)
+        {
+            // Create partition DataFrame by taking rows at these indices
+            var partitionDf = df.Take(indices.ToArray());
+
+            // Evaluate inner expression on partition
+            var partitionResult = EvaluateWindowInner(window.Inner, partitionDf, indices);
+
+            // Update result metadata from first partition
+            if (resultName == "window_result")
+            {
+                resultName = partitionResult.Name;
+                resultType = partitionResult.DataType;
+            }
+
+            // Scatter results back to original positions
+            for (int i = 0; i < indices.Count; i++)
+            {
+                result[indices[i]] = partitionResult[i];
+            }
+        }
+
+        return BuildSeriesFromAnyValues(resultName, result.ToList(), resultType);
+    }
+
+    private static Dictionary<string, List<int>> ComputePartitionGroups(Series[] partitionKeys, int height)
+    {
+        var groups = new Dictionary<string, List<int>>();
+
+        for (int i = 0; i < height; i++)
+        {
+            // Build composite key from all partition columns
+            var keyParts = new string[partitionKeys.Length];
+            for (int k = 0; k < partitionKeys.Length; k++)
+            {
+                var val = partitionKeys[k][i];
+                keyParts[k] = val.IsNull ? "\0NULL\0" : val.ToString() ?? "";
+            }
+            var key = string.Join("\0SEP\0", keyParts);
+
+            if (!groups.TryGetValue(key, out var indices))
+            {
+                indices = new List<int>();
+                groups[key] = indices;
+            }
+            indices.Add(i);
+        }
+
+        return groups;
+    }
+
+    private static Series EvaluateWindowInner(Expr inner, DataFrame partitionDf, List<int>? partitionIndices)
+    {
+        // Handle aggregations: broadcast scalar to all rows in partition
+        if (inner is Expr.Agg agg)
+        {
+            var aggSeries = Evaluate(agg.Inner, partitionDf);
+            var aggValue = agg.Type switch
+            {
+                AggregationType.Sum => aggSeries.Sum(),
+                AggregationType.Mean => aggSeries.Mean(),
+                AggregationType.Min => aggSeries.Min(),
+                AggregationType.Max => aggSeries.Max(),
+                AggregationType.Count => AnyValue.From(aggSeries.Count()),
+                AggregationType.First => aggSeries.First(),
+                AggregationType.Last => aggSeries.Last(),
+                AggregationType.Median => aggSeries.Median(),
+                AggregationType.Std => aggSeries.Std(),
+                AggregationType.Var => aggSeries.Var(),
+                AggregationType.NUnique => AnyValue.From(aggSeries.Unique().Length),
+                _ => throw new NotSupportedException($"Window aggregation not supported: {agg.Type}")
+            };
+
+            // Broadcast to partition size
+            return CreateBroadcastSeries(aggSeries.Name, aggValue, partitionDf.Height);
+        }
+
+        // Handle window functions
+        if (inner is Expr.Function func)
+        {
+            return EvaluateWindowFunction(func, partitionDf);
+        }
+
+        // Handle aliased expressions
+        if (inner is Expr.Alias alias)
+        {
+            var innerResult = EvaluateWindowInner(alias.Inner, partitionDf, partitionIndices);
+            return innerResult.Rename(alias.Name);
+        }
+
+        // Default: regular evaluation (for non-window expressions)
+        return Evaluate(inner, partitionDf);
+    }
+
+    private static Series EvaluateWindowFunction(Expr.Function func, DataFrame partitionDf)
+    {
+        var funcName = func.Name.ToLower();
+
+        // Handle rolling/expanding/ewm functions in window context
+        if (funcName.StartsWith("rolling_") || funcName.StartsWith("expanding_") || funcName.StartsWith("ewm_"))
+        {
+            return EvaluateRollingOrEwmFunction(func, partitionDf);
+        }
+
+        // Functions that need the series argument
+        if (func.Args.Count > 0)
+        {
+            var series = Evaluate(func.Args[0], partitionDf);
+
+            return funcName switch
+            {
+                "rank" => WindowOperations.Rank(series, GetStringArg(func, 1, "average")),
+                "dense_rank" => WindowOperations.DenseRank(series),
+                "percent_rank" => WindowOperations.PercentRank(series),
+                "shift" => SeriesAggregations.Shift(series, GetIntArg(func, 1, 1)),
+                "lead" => WindowOperations.Lead(series, GetIntArg(func, 1, 1)),
+                "lag" => WindowOperations.Lag(series, GetIntArg(func, 1, 1)),
+                "cumsum" => SeriesAggregations.CumSum(series),
+                "cummin" => SeriesAggregations.CumMin(series),
+                "cummax" => SeriesAggregations.CumMax(series),
+                "cumprod" => SeriesAggregations.CumProd(series),
+                "cumcount" => WindowOperations.CumCount(series),
+                "diff" => SeriesAggregations.Diff(series, GetIntArg(func, 1, 1)),
+                "pct_change" => SeriesAggregations.PctChange(series, GetIntArg(func, 1, 1)),
+                _ => throw new NotSupportedException($"Window function not supported: {func.Name}")
+            };
+        }
+
+        // Functions without series argument (standalone)
+        return funcName switch
+        {
+            "row_number" => WindowOperations.RowNumber(
+                Series.FromValues("x", Enumerable.Range(0, partitionDf.Height).ToArray())),
+            "count" => Series.FromValues("count", Enumerable.Repeat(partitionDf.Height, partitionDf.Height).ToArray()),
+            _ => throw new NotSupportedException($"Window function not supported: {func.Name}")
+        };
+    }
+
+    private static Series CreateBroadcastSeries(string name, AnyValue value, int length)
+    {
+        if (value.IsNull)
+            return Series.FromNullable<double>(name, new double?[length]);
+
+        if (value.TryGetDouble(out var d))
+            return Series.FromValues(name, Enumerable.Repeat(d, length).ToArray());
+
+        if (value.TryGetInt64(out var l))
+            return Series.FromValues(name, Enumerable.Repeat((double)l, length).ToArray());
+
+        if (value.TryGetString(out var s))
+            return Series.FromValues(name, Enumerable.Repeat(s, length).ToArray());
+
+        // Handle int and bool via Kind check
+        if (value.Kind == AnyValueKind.Int32)
+            return Series.FromValues(name, Enumerable.Repeat(value.AsInt32(), length).ToArray());
+
+        if (value.Kind == AnyValueKind.Boolean)
+            return Series.FromValues(name, Enumerable.Repeat(value.AsBoolean(), length).ToArray());
+
+        return Series.FromValues(name, Enumerable.Repeat(value.ToString(), length).ToArray());
+    }
+
+    private static string GetStringArg(Expr.Function func, int index, string defaultValue)
+    {
+        if (index < func.Args.Count && func.Args[index] is Expr.Literal lit)
+        {
+            return lit.Value.AsString() ?? defaultValue;
+        }
+        return defaultValue;
+    }
+
+    private static int GetIntArg(Expr.Function func, int index, int defaultValue)
+    {
+        if (index < func.Args.Count && func.Args[index] is Expr.Literal lit)
+        {
+            if (lit.Value.Kind == AnyValueKind.Int32) return lit.Value.AsInt32();
+            if (lit.Value.TryGetInt64(out var l)) return (int)l;
+        }
+        return defaultValue;
+    }
+
+    private static bool GetBoolArg(Expr.Function func, int index, bool defaultValue)
+    {
+        if (index < func.Args.Count && func.Args[index] is Expr.Literal lit)
+        {
+            if (lit.Value.Kind == AnyValueKind.Boolean) return lit.Value.AsBoolean();
+        }
+        return defaultValue;
+    }
+
+    private static double GetDoubleArg(Expr.Function func, int index, double defaultValue)
+    {
+        if (index < func.Args.Count && func.Args[index] is Expr.Literal lit)
+        {
+            if (lit.Value.TryGetDouble(out var d)) return d;
+            if (lit.Value.TryGetInt64(out var l)) return l;
+            if (lit.Value.Kind == AnyValueKind.Int32) return lit.Value.AsInt32();
+        }
+        return defaultValue;
     }
 }
