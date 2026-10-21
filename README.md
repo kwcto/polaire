@@ -1,235 +1,192 @@
 # Polaire
 
-**Blazingly fast DataFrames for .NET, inspired by [Polars](https://pola.rs)**
+**Expressive DataFrames for C# and .NET, inspired by [Polars](https://pola.rs).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
 
----
+> "I love C# and I feel that it is underrated for exploratory data analysis."
 
-> *"I love C# and I feel that it is underrated for exploratory data analysis."*
+Polaire is a ground-up C# implementation that brings Polars-style data manipulation to .NET. The goal is **complete feature parity and reasonable performance parity**, with an API that feels natural in C#. Correctness and speed are equally important.
 
-Polaire brings the power and elegance of Polars to the .NET ecosystem. No more compromises. No more context switching. Just pure, expressive, high-performance data manipulation in the language you love.
+The engine combines Apache Arrow columnar storage, null validity bitmaps, expression trees, lazy query optimization, and ARM NEON / x64 AVX intrinsics. It is under active development; the implemented features below do not yet establish full Polars compatibility.
 
-## Why Polaire?
+## Current status
 
-The .NET ecosystem has lacked a truly modern DataFrame library. While Python developers enjoy Polars' lightning-fast performance and elegant API, C# developers have been left behind—until now.
+As of **October 21, 2026**:
 
-Polaire is a ground-up implementation inspired by Polars, built specifically for .NET with:
+- **2,527 tests passing**, with no failures or skipped tests.
+- **.NET 8 / C# 12**; the solution builds with no warnings or errors.
+- SQL, window functions, rolling/expanding/EWM expressions, JSON/NDJSON writing, temporal parsing/formatting, and horizontal aggregations are implemented.
+- Important gaps remain in type support, I/O fidelity, advanced transformations, and execution. See [known limitations](#known-limitations) and the [feature gap analysis](docs/FEATURE_GAP_ANALYSIS.md).
 
-- **Apache Arrow** columnar memory format for zero-copy interop
-- **SIMD-optimized** operations using architecture-specific intrinsics (ARM NEON / x64 AVX)
-- **Lazy evaluation** with query optimization (predicate pushdown, projection pushdown, constant folding)
-- **Expression-based API** that's both powerful and readable
-- **Full null handling** with validity bitmaps (1 bit per value)
+For scale, the **Polars `py-2.0.0` Python suite collected 42,076 test cases** on October 21, 2026, including 42,053 unit cases. The former estimate of 5,000–10,000 tests was too low. These counts include parameterized cases; they are not a measure of feature coverage or proof that tests have been faithfully ported. The [gap analysis](docs/FEATURE_GAP_ANALYSIS.md) records the collection method and breakdown.
 
-## Quick Start
+## Build and use from source
+
+Install the .NET 8 SDK, then:
+
+```bash
+git clone https://github.com/kwcto/polaire.git
+cd polaire
+dotnet build
+dotnet test
+```
+
+Reference the library from a .NET 8 application:
+
+```bash
+dotnet add /path/to/your-app.csproj reference /path/to/polaire/src/Polaire/Polaire.csproj
+```
+
+## Quick start
 
 ```csharp
 using Polaire;
 using static Polaire.Pl;
 
-// Create a DataFrame
 var df = DataFrame(
     Series("name", new[] { "Alice", "Bob", "Charlie", "Diana" }),
+    Series("team", new[] { "A", "B", "A", "B" }),
     Series("age", new[] { 25, 30, 35, 28 }),
     Series("score", new[] { 85.5, 92.0, 78.5, 95.0 })
 );
 
-// Query with expressions
 var result = df
     .Lazy()
-    .Filter(Col("age") > 26)
-    .Select(Col("name"), Col("score") * 1.1)
+    .Filter(Col("age").Gt(26))
+    .Select(Col("name"), (Col("score") * 1.1).As("adjusted_score"))
     .Collect();
 
-// Group and aggregate
+result.Print();
+
 var summary = df
     .Lazy()
-    .GroupBy(Col("age") > 30)
+    .GroupBy("team")
     .Agg(
         Col("score").Mean().As("avg_score"),
-        Col("name").Count().As("count")
+        Col("name").CountExpr().As("count")
+    )
+    .Collect();
+
+summary.Print();
+```
+
+Lazy grouping currently requires column keys. For a computed key, create a column with `WithColumns` before grouping by its name. The eager `df.GroupBy(...)` API uses aggregation tuples or a dictionary instead of expressions:
+
+```csharp
+var eagerSummary = df.GroupBy("team")
+    .Agg(("score", "mean", s => s.Mean(), "avg_score"));
+```
+
+## Implemented capabilities
+
+| Area | Available today |
+|---|---|
+| Series | Arithmetic, comparisons, null handling, sorting, uniqueness, casting, cumulative operations, shift/diff, rank, interpolation, rolling and EWM operations |
+| DataFrames | Selection, filtering, sorting, grouping, joins, sampling, melt, vertical/horizontal stacking |
+| Expressions | Arithmetic, conditions, aggregations, string and temporal operations, window functions, rolling/expanding/EWM, horizontal aggregations |
+| Lazy execution | Query plans, projection and predicate optimizer passes, constant folding, plan explanation, limit/fetch |
+| SQL | `SqlContext` and `DataFrame.Sql`, including SELECT, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, JOIN and CASE |
+| I/O | CSV, Parquet, JSON and NDJSON readers/writers; CSV, Parquet and NDJSON lazy scans |
+
+Common integer, floating-point, Boolean, string, Date and DateTime columns are supported. List and Struct columns have dedicated operations, with remaining integration gaps. Defining a data type does not imply complete construction, computation, or file-format support; see the [type inventory](docs/FEATURE_GAP_ANALYSIS.md).
+
+### SQL, windows and rolling calculations
+
+These examples continue with the `df` from the quick start:
+
+```csharp
+var sqlSummary = df.Sql(
+    "SELECT team, AVG(score) AS avg_score FROM self GROUP BY team");
+
+var enriched = df.Lazy()
+    .WithColumns(
+        Col("score").Mean().Over(Col("team")).As("team_avg"),
+        Col("score").RollingMeanExpr(3).As("rolling_avg"),
+        SumHorizontal("age", "score").As("row_total")
     )
     .Collect();
 ```
 
-## Features
+For queries across multiple named DataFrames, register them with `Polaire.Sql.SqlContext`. SQL uses the existing expression and lazy execution engine; SQL syntax support is a subset of Polars SQL.
 
-### Data Types
-Full support for 29 data types matching Polars:
-- Integers: `Int8`, `Int16`, `Int32`, `Int64`, `Int128`
-- Unsigned: `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128`
-- Floats: `Float32`, `Float64`
-- `Boolean`, `String`, `Binary`, `Decimal`
-- Temporal: `Date`, `Time`, `DateTime`, `Duration`
-- Nested: `List`, `Struct`, `Array`
-- Special: `Categorical`, `Enum`, `Object`, `Null`, `Unknown`
-
-### Operations
-```csharp
-// Arithmetic (SIMD-optimized)
-var total = series1 + series2;
-var scaled = series * 2.5;
-
-// Aggregations
-var sum = series.Sum();
-var mean = series.Mean();
-var std = series.Std();
-
-// String operations
-var upper = series.Str.ToUpper();
-var contains = series.Str.Contains("pattern");
-
-// DateTime operations
-var year = series.Dt.Year();
-var weekday = series.Dt.DayOfWeek();
-
-// Comparisons
-var mask = series > 100;
-var between = series.Between(10, 20);
-```
-
-### Lazy Evaluation & Query Optimization
+### Date parsing and formatting
 
 ```csharp
-var optimized = df
-    .Lazy()
-    .Filter(Col("status") == "active")    // Predicate pushdown
-    .Select(Col("id"), Col("name"))       // Projection pushdown
-    .Sort(Col("name"))
-    .Collect();
+var dates = Series("date", new[] { "2024-01-31", "2024-02-29" })
+    .Str.ToDate("%Y-%m-%d");
 
-// Inspect the query plan
-df.Lazy()
-    .Filter(Col("x") > 10)
-    .Explain();  // Shows optimized plan
+var nextMonth = dates.Dt.OffsetBy("1mo");
+var formatted = nextMonth.Dt.Strftime("%d %b %Y");
 ```
 
-### Joins
-```csharp
-var joined = left.Join(
-    right,
-    Col("key"),
-    Col("key"),
-    JoinType.Inner
-);
-```
+Formats containing `%` use Polars/chrono-style specifiers; .NET formats such as `"yyyy-MM-dd"` are also supported. `OffsetBy` accepts calendar-aware duration strings such as `"1mo"` and `"1y2mo3d"`.
 
-### GroupBy Aggregations
-```csharp
-var grouped = df
-    .GroupBy("category")
-    .Agg(new Dictionary<string, List<string>> {
-        ["value"] = new() { "sum", "mean", "count" },
-        ["score"] = new() { "min", "max" }
-    });
-```
-
-## Installation
-
-```bash
-dotnet add package Polaire
-```
-
-### I/O Operations
+### Reading, writing and lazy scans
 
 ```csharp
-// Eager reading
-var df = ReadCsv("data.csv");
-var df = ReadParquet("data.parquet");
-var df = ReadJson("data.json");
-var df = ReadNdjson("data.ndjson");
+var csv = ReadCsv("data.csv");
+var parquet = ReadParquet("data.parquet");
+var json = ReadJson("data.json");
+var ndjson = ReadNdjson("data.ndjson");
 
-// Eager writing
 df.WriteCsv("output.csv");
 df.WriteParquet("output.parquet");
+df.WriteJson("output.json");
+df.WriteNdjson("output.ndjson");
 
-// Lazy scanning (enables predicate/projection pushdown)
-var result = ScanCsv("large.csv")
-    .Filter(Col("status").Eq("active"))  // Only reads matching rows
-    .Select("id", "name")                 // Only reads these columns
-    .Collect();
+var query = ScanCsv("data.csv")
+    .Filter(Col("age").Gt(26))
+    .Select("name", "score");
+
+Console.WriteLine(query.Explain());
+var scanned = query.Collect();
 ```
+
+Scans defer reading until collection and pass projected columns to readers. Scan predicates currently run after the reader has materialized its DataFrame. Lazy scanning therefore does not yet provide streaming execution or guarantee that only matching rows are read.
+
+## Known limitations
+
+- **Parquet writing:** Date/DateTime columns are written as strings; Int8, Int16 and unsigned integer columns can throw `InvalidCastException`.
+- **Types:** Time and Duration have type definitions but no usable Series construction/operations. Other specialized types also lack complete support.
+- **Nested columns:** concatenating List or Struct columns throws `NotSupportedException`. Lazy `Explode` exists as an API but throws `NotImplementedException` during execution.
+- **Transformations:** as-of joins, pivot, transpose and dynamic time-based grouping remain unimplemented.
+- **Execution and formats:** streaming execution, IPC/Arrow file I/O and GPU acceleration remain unimplemented.
+- **Parity:** API availability, passing tests and individual benchmarks do not establish complete behavioral compatibility with Polars.
+
+The [feature gap analysis](docs/FEATURE_GAP_ANALYSIS.md) tracks the broader inventory and test-porting work. Full feature parity remains the goal.
 
 ## Performance
 
-Polaire leverages modern .NET performance features:
+Architecture-specific intrinsics, pooled memory, chunked columns and query optimization support the goal of competitive .NET performance. Optimizations must preserve values, types and null semantics across scalar and vectorized paths.
 
-- **Architecture-specific intrinsics** - ARM NEON (`AdvSimd.Arm64`) and x64 AVX (`Avx`) for maximum performance
-- **Memory pooling** to reduce allocation pressure
-- **Chunked arrays** for cache-friendly access patterns
-- **Lazy evaluation** to minimize unnecessary computation
-- **Predicate/projection pushdown** for I/O operations
+### Historical aggregation measurements
 
-### Benchmarks (Apple M1 Max, .NET 8.0)
+The following **January 2026** results were recorded on an **Apple M1 Max with .NET 8**, using **1,000,000 Float64 values**:
 
-#### Aggregations (1M rows, Float64)
-| Operation | Polaire | Notes |
-|-----------|---------|-------|
-| Min | 107 µs | ARM NEON intrinsics |
-| Max | 104 µs | ARM NEON intrinsics |
-| Sum | 128 µs | ARM NEON intrinsics |
-| Mean | 127 µs | ARM NEON intrinsics |
-| Std | 269 µs | ARM NEON two-pass |
+| Operation | Polaire | Polars | Recorded comparison |
+|---|---:|---:|---|
+| Sum | 128 µs | 101 µs | Polaire about 1.3× slower |
+| Mean | 127 µs | 104 µs | Polaire about 1.2× slower |
+| Min | 107 µs | 101 µs | Similar timings |
+| Max | 104 µs | 101 µs | Similar timings |
+| Std | 269 µs | 624 µs | Polaire about 2.3× faster |
 
-#### vs Polars (Rust)
-| Operation | Polaire (C#) | Polars (Rust) | Status |
-|-----------|--------------|---------------|--------|
-| Min | 107 µs | 101 µs | **~PARITY!** |
-| Max | 104 µs | 101 µs | **~PARITY!** |
-| Sum | 128 µs | 101 µs | 1.3x |
-| Mean | 127 µs | 104 µs | 1.2x |
-| Std | 269 µs | 624 µs | **2.3x FASTER!** |
+These are historical measurements of selected basic aggregations, not a current comparison against Polars 2.0.0 or evidence of parity across joins, grouping, I/O and full queries. The recorded comparison does not identify the original Polars version. [`benchmarks/polars_comparison.py`](benchmarks/polars_comparison.py) measures the installed Polars version but reuses hardcoded historical Polaire timings; rerunning it alone does not refresh both sides.
 
-🎉 **Polaire has achieved performance parity with Polars** on basic aggregations using architecture-specific intrinsics!
+Run Polaire benchmarks with:
 
-## Current Status
-
-- **1194 tests passing**
-- **Build:** Clean (0 warnings, 0 errors)
-- **Target:** .NET 8.0
-
-## Roadmap
-
-- [x] Core data types and Series
-- [x] DataFrame operations
-- [x] Expression system
-- [x] Lazy evaluation with query optimization
-- [x] GroupBy aggregations
-- [x] Join operations
-- [x] String and DateTime operations
-- [x] CSV/Parquet/JSON/NDJSON I/O
-- [x] SIMD-optimized aggregations
-- [x] Architecture-specific intrinsics (ARM NEON / x64 AVX)
-- [ ] SQL interface
-- [ ] Window functions
-- [ ] Streaming/chunked processing
-- [ ] GPU acceleration (CUDA/Metal)
+```bash
+dotnet run -c Release --project benchmarks/Polaire.Benchmarks/
+```
 
 ## Contributing
 
-Contributions are welcome! Whether it's:
+Contributions toward correctness, feature completeness, performance and documentation are welcome. When porting Polars tests, preserve the original intent, assertions and static values where possible, and record their upstream source. Add checks for actual values, types and nulls, including edge cases; raw test counts are not a substitute for behavioral coverage.
 
-- Bug reports and feature requests
-- Performance optimizations
-- New operations and data types
-- Documentation improvements
-- Test coverage
-
-## Philosophy
-
-Polaire aims to be:
-
-1. **Familiar** - If you know Polars, you know Polaire
-2. **Fast** - Performance is a feature, not an afterthought
-3. **Idiomatic** - Feels natural in C#, not like a port
-4. **Complete** - Feature parity is the goal
+Use [AGENTS.md](AGENTS.md) for project objectives and working guidance, [CLAUDE.md](CLAUDE.md) for API gotchas and implementation lessons, and the [feature gap analysis](docs/FEATURE_GAP_ANALYSIS.md) for remaining work. Keep documentation aligned with verified behavior.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-*Built with determination and a refusal to write Python.*
+MIT License — see [LICENSE](LICENSE).
