@@ -322,20 +322,37 @@ public static class SeriesOperations
         }
 
         // Create series based on original type
-        var valuesSeries = BuildSeriesFromAnyValues(series.Name, valuesList, series.DataType);
+        var valuesSeries = FromAnyValues(series.Name, valuesList, series.DataType);
         var countsSeries = Series.FromValues("count", countsList.ToArray());
 
         return new DataFrame(new[] { valuesSeries, countsSeries });
     }
 
-    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
+    /// <summary>
+    /// Builds a series of the given type from boxed values. Integer values are accepted for
+    /// float types and any integer kind for integer types. Types without a typed builder fall
+    /// back to a string series.
+    /// </summary>
+    internal static Series FromAnyValues(string name, IReadOnlyList<AnyValue> values, DataType dtype)
     {
         return dtype switch
         {
-            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (double?)v.AsFloat64()).ToArray()),
-            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
+            DataType.Int32Type => Series.FromNullable(name, values.Select(v =>
+                v.IsNull ? null : v.TryGetInt64(out var l) ? checked((int?)l) : (int?)v.AsInt32()).ToArray()),
+            DataType.Int64Type => Series.FromNullable(name, values.Select(v =>
+                v.IsNull ? null : v.TryGetInt64(out var l) ? (long?)l : v.AsInt64()).ToArray()),
+            DataType.Float32Type => Series.FromNullable(name, values.Select(v =>
+                v.IsNull ? null : v.TryGetDouble(out var d) ? (float?)d : v.AsFloat32()).ToArray()),
+            DataType.Float64Type => Series.FromNullable(name, values.Select(v =>
+                v.IsNull ? null : v.TryGetDouble(out var d) ? (double?)d : v.AsFloat64()).ToArray()),
+            DataType.BooleanType => Series.FromNullable(name, values.Select(v =>
+                v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
+            DataType.StringType => Series.FromValues(name, values.Select(v =>
+                v.IsNull ? null : v.TryGetString(out var s) ? s : v.ToString()).ToArray()),
+            DataType.DateType => TemporalConversions.DateSeries(name, values.Select(v =>
+                v.IsNull ? null : (DateOnly?)v.AsDate()).ToArray()),
+            DataType.DateTimeType dt => TemporalConversions.DateTimeSeries(name, values.Select(v =>
+                v.IsNull ? null : (DateTime?)v.AsDateTime()).ToArray(), dt.Unit, dt.TimeZone),
             _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
         };
     }
@@ -400,8 +417,113 @@ public static class SeriesOperations
             DataType.Float64Type => TakeFloat64(series, indices),
             DataType.StringType => TakeString(series, indices),
             DataType.BooleanType => TakeBoolean(series, indices),
+            var dtype when CanGather(dtype) =>
+                Gather(series.Name, dtype, indices.Select(i => (series, i)), indices.Length),
             _ => TakeGeneric(series, indices)
         };
+    }
+
+    // ============================================================================
+    // Concat
+    // ============================================================================
+
+    /// <summary>
+    /// Concatenates series of the same data type into a single-chunk series named after the first.
+    /// </summary>
+    public static Series Concat(IReadOnlyList<Series> series)
+    {
+        if (series.Count == 0)
+            throw new ArgumentException("At least one series is required", nameof(series));
+
+        var dtype = series[0].DataType;
+        foreach (var s in series)
+        {
+            if (s.DataType != dtype)
+                throw new ArgumentException(
+                    $"Cannot concatenate series '{s.Name}' of type {s.DataType} with type {dtype}");
+        }
+
+        if (!CanGather(dtype))
+            throw new NotSupportedException($"Concatenation not supported for {dtype}");
+
+        var rows = series.SelectMany(s => Enumerable.Range(0, s.Length).Select(i => (s, i)));
+        return Gather(series[0].Name, dtype, rows, series.Sum(s => s.Length));
+    }
+
+    private static bool CanGather(DataType dtype) =>
+        dtype is DataType.Int8Type or DataType.Int16Type or DataType.Int32Type or DataType.Int64Type
+            or DataType.UInt8Type or DataType.UInt16Type or DataType.UInt32Type or DataType.UInt64Type
+            or DataType.Float32Type or DataType.Float64Type or DataType.BooleanType or DataType.StringType
+            or DataType.DateType or DataType.DateTimeType;
+
+    /// <summary>
+    /// Builds a single-chunk series of type <paramref name="dtype"/> from (source, row) pairs,
+    /// preserving the physical representation (including the unit and time zone of DateTime columns).
+    /// </summary>
+    private static Series Gather(string name, DataType dtype, IEnumerable<(Series Source, int Index)> rows, int count)
+    {
+        IArrowArray array = dtype switch
+        {
+            DataType.Int8Type => GatherValues<sbyte, Int8Array.Builder>(rows, new Int8Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.Int16Type => GatherValues<short, Int16Array.Builder>(rows, new Int16Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.Int32Type => GatherValues<int, Int32Array.Builder>(rows, new Int32Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.Int64Type => GatherValues<long, Int64Array.Builder>(rows, new Int64Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.UInt8Type => GatherValues<byte, UInt8Array.Builder>(rows, new UInt8Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.UInt16Type => GatherValues<ushort, UInt16Array.Builder>(rows, new UInt16Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.UInt32Type => GatherValues<uint, UInt32Array.Builder>(rows, new UInt32Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.UInt64Type => GatherValues<ulong, UInt64Array.Builder>(rows, new UInt64Array.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.Float32Type => GatherValues<float, FloatArray.Builder>(rows, new FloatArray.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.Float64Type => GatherValues<double, DoubleArray.Builder>(rows, new DoubleArray.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.BooleanType => GatherValues<bool, BooleanArray.Builder>(rows, new BooleanArray.Builder().Reserve(count),
+                (b, v) => b.Append(v), b => b.AppendNull()).Build(),
+            DataType.StringType => GatherStrings(rows),
+            DataType.DateType => TemporalConversions.AsDate32(
+                GatherValues<int, Int32Array.Builder>(rows, new Int32Array.Builder().Reserve(count),
+                    (b, v) => b.Append(v), b => b.AppendNull()).Build()),
+            DataType.DateTimeType dt => TemporalConversions.AsTimestamp(
+                GatherValues<long, Int64Array.Builder>(rows, new Int64Array.Builder().Reserve(count),
+                    (b, v) => b.Append(v), b => b.AppendNull()).Build(), dt),
+            _ => throw new NotSupportedException($"Gather not supported for {dtype}")
+        };
+
+        return Series.FromArrowArray(name, array, dtype);
+    }
+
+    private static TBuilder GatherValues<T, TBuilder>(
+        IEnumerable<(Series Source, int Index)> rows, TBuilder builder,
+        Action<TBuilder, T> append, Action<TBuilder> appendNull) where T : struct
+    {
+        foreach (var (source, index) in rows)
+        {
+            if (source.IsNull(index))
+                appendNull(builder);
+            else
+                append(builder, ((ChunkedArray<T>)source.Data).GetValue(index));
+        }
+        return builder;
+    }
+
+    private static StringArray GatherStrings(IEnumerable<(Series Source, int Index)> rows)
+    {
+        var builder = new StringArray.Builder();
+        foreach (var (source, index) in rows)
+        {
+            if (source.IsNull(index))
+                builder.AppendNull();
+            else
+                builder.Append(((StringChunkedArray)source.Data).GetString(index));
+        }
+        return builder.Build();
     }
 
     private static Series TakeInt32(Series series, int[] indices)

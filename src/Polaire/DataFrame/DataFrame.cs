@@ -406,41 +406,22 @@ public sealed class DataFrame : IEnumerable<Series>
                 throw new ArgumentException("All DataFrames must have the same schema for vertical concatenation");
         }
 
-        // Concatenate each column
-        var resultColumns = new List<Series>();
-        for (int i = 0; i < schema.Count; i++)
-        {
-            var colName = schema[i];
-            var values = new List<AnyValue>();
-
-            foreach (var df in dfs)
-            {
-                for (int j = 0; j < df.Height; j++)
-                {
-                    values.Add(df[colName][j]);
-                }
-            }
-
-            // Build series from values
-            var dtype = dfs[0][colName].DataType;
-            resultColumns.Add(BuildSeriesFromAnyValues(colName, values, dtype));
-        }
+        // Concatenate each column, preserving its data type
+        var resultColumns = schema
+            .Select(colName => Series.Concat(dfs.Select(df => df[colName]).ToArray()))
+            .ToArray();
 
         return new DataFrame(resultColumns);
     }
 
-    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
-    {
-        return dtype switch
-        {
-            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (double?)v.AsFloat64()).ToArray()),
-            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
-        };
-    }
+    /// <summary>Returns a new DataFrame with the rows of <paramref name="other"/> appended. Schemas must match.</summary>
+    public DataFrame VStack(DataFrame other) => VConcat(this, other);
+
+    /// <summary>Returns a new DataFrame with the given columns added on the right.</summary>
+    public DataFrame HStack(params Series[] columns) => new(_columns.Concat(columns));
+
+    /// <summary>Returns a new DataFrame with the columns of <paramref name="other"/> added on the right.</summary>
+    public DataFrame HStack(DataFrame other) => HConcat(this, other);
 
     /// <summary>Horizontally concatenates DataFrames.</summary>
     public static DataFrame HConcat(params DataFrame[] dfs)
@@ -587,7 +568,7 @@ public sealed class DataFrame : IEnumerable<Series>
         {
             var values = rows.Select(r => r[colName]).ToList();
             var dtype = InferType(values);
-            columns.Add(BuildSeriesFromAnyValues(colName, values, dtype));
+            columns.Add(SeriesOperations.FromAnyValues(colName, values, dtype));
         }
 
         return new DataFrame(columns);
@@ -607,6 +588,8 @@ public sealed class DataFrame : IEnumerable<Series>
             AnyValueKind.Float64 => DataType.Float64,
             AnyValueKind.Boolean => DataType.Boolean,
             AnyValueKind.String => DataType.String,
+            AnyValueKind.Date => DataType.Date,
+            AnyValueKind.DateTime => DataType.DateTime(TimeUnit.Nanoseconds),
             _ => DataType.String
         };
     }

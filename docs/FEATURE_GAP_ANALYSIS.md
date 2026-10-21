@@ -1,6 +1,11 @@
 # Polaire Feature Gap Analysis & Test Porting Plan
 
-Generated: January 2025
+Generated: January 2026
+
+> **Out of date (October 2026):** this analysis was written at 255 tests. Many items marked Missing
+> below have since been implemented, including cumulative/shift/diff ops, window functions,
+> rolling/EWM, rank, interpolate, SQL, JSON/NDJSON writing, strptime/offset_by and horizontal
+> functions. CLAUDE.md has the current status and the remaining gaps.
 
 ## Executive Summary
 

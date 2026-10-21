@@ -4,12 +4,13 @@
 
 Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.rs), the high-performance DataFrame library. The goal is **complete feature parity** and **reasonable performance parity** with the Python/Rust Polars library.
 
-## Current State (January 2025)
+## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2293 passing, 0 failing
+- **Tests:** 2527 passing, 0 failing
 - **Target:** .NET 8.0
-- **I/O:** CSV, Parquet, JSON/NDJSON (read/write complete)
+- **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
+- **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
 - **Lazy Scanning:** Implemented with predicate/projection pushdown
 - **Performance:** Near parity with Polars for aggregations (see benchmarks below)
 
@@ -107,18 +108,44 @@ df.Lazy().WithColumns(Col("value").RollingMeanExpr(3, center: true))   // Center
 df.Lazy().WithColumns(Col("value").ExpandingSumExpr())                 // Expanding sum
 df.Lazy().WithColumns(Col("value").EwmMeanExpr(0.5).As("ema"))         // EWM mean
 df.Lazy().WithColumns(Col("value").RollingSumExpr(2).Over(Col("g")))   // Per-group rolling
+
+// 13. Expr slice is SliceExpr (Expr.Slice is a nested record type)
+Col("a").SliceExpr(-2)          // Last two values; Polars offset/length clipping
+
+// 14. Format strings: '%' means Polars/chrono specifiers, otherwise .NET format
+s.Str.ToDate("%Y-%m-%d")        s.Str.ToDatetime("%F %T%.f")    s.Dt.Strftime("%d %b %Y")
+s.Dt.Strftime("yyyy-MM-dd")     // .NET custom format still works
+s.Dt.OffsetBy("1mo")            // Polars duration string; keeps Date/DateTime type and unit
+
+// 15. Row-wise functions take Exprs or column names
+Pl.SumHorizontal("a", "b")      // Also MeanHorizontal, MinHorizontal, MaxHorizontal
 ```
+
+## Temporal Storage (read before touching Date/DateTime code)
+
+- `Date` columns hold Arrow Date32: **days since 1970-01-01** (`ChunkedArray<int>`).
+- `DateTime` columns hold Arrow Timestamp: **units since the Unix epoch** in the column's `TimeUnit` (`ChunkedArray<long>`, default nanoseconds).
+- `AnyValue` uses .NET representations instead (`DateOnly.DayNumber`, `DateTime.Ticks`).
+- Convert only through `Core/TemporalConversions` (`DateFromDays`, `DateTimeFromRaw`, `DateSeries`, `DateTimeSeries`). Calling `DateOnly.FromDayNumber(raw)` or `new DateTime(raw)` on stored values gives wrong dates.
+- .NET `DateTime` values are stored as wall-clock time; `Kind` is ignored on input and `Utc` on output.
 
 ## Not Yet Implemented
 
-- `DataFrame.VStack`, `DataFrame.HStack`, `Series.Concat`
-- `Series.NUnique` (use `series.Unique().Length` instead)
-- `SumHorizontal`, `MeanHorizontal`
-- `Expr.Slice` method
-- `LazyFrame.Limit` (use `Head` instead)
-- SQL interface, GPU acceleration
+- As-of join, pivot, transpose, `group_by_dynamic`
+- `Time` and `Duration` columns (the types exist, but series construction and operations don't)
+- Parquet writer: Date/DateTime columns are written as strings; Int8/Int16/UInt columns throw `InvalidCastException`
+- Concatenating List/Struct columns (`Series.Concat` throws `NotSupportedException`)
+- Streaming execution, IPC/Arrow files, GPU acceleration
 
 ## Critical Bug Fixes
+
+### Temporal Epoch Handling (Session 16)
+**Problem:** Reads treated Date32 days as `DateOnly.DayNumber` (days since year 1) and Timestamp nanoseconds as .NET ticks, so 2024-01-01 read as 0055-01-01 and `Dt.Year()` on a 2024 timestamp returned 5446. `series[i]` returned null for every DateTime value, and `Take` converted Date/DateTime (and Int8/Int16/UInt) columns to strings, so `Filter`, `Sort`, `Unique` and `Concat` changed column types. The old tests checked only result types and lengths.
+
+**Fix:** All conversions go through `TemporalConversions`; `Take`/`Concat` preserve the physical type. `TemporalCorrectnessTests` checks values.
+
+### JSON Reader Type Inference (Session 16)
+`JsonReader` inferred every numeric column as Boolean (all null) because the number case never cleared `allBool`. `NdjsonReader` was correct.
 
 ### SIMD NaN Handling (Session 9)
 **Problem:** SIMD Min/Max propagated NaN (IEEE 754), but Polars semantics skip NaN.
@@ -203,3 +230,5 @@ sum = p2.GetElement(0);
 | 12 | 2264 | Window functions (over clause) implementation |
 | 13 | 2282 | Rolling/Expanding/EWM expression methods |
 | 14 | 2293 | Rank/Interpolate expression methods (RowNumber, OrdinalRank, FillForward, etc.) |
+| 15 | 2335 | SQL interface (SqlContext, DataFrame.Sql) |
+| 16 | 2527 | Date/DateTime epoch fix; JSON/NDJSON writers; Strptime/Strftime (chrono formats), OffsetBy; horizontal functions; SliceExpr; Series.Concat/Append/NUnique; VStack/HStack; LazyFrame.Limit |

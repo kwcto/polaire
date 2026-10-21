@@ -151,6 +151,7 @@ public static class JsonReader
                         allInt = false;
                     if (allLong && !elem.TryGetInt64(out _))
                         allLong = false;
+                    allBool = false;  // Numbers are not booleans
                     break;
 
                 case JsonValueKind.True:

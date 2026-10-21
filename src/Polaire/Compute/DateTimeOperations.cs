@@ -1,6 +1,7 @@
 // Licensed under the MIT License.
 // Polaire - High-performance DataFrame library for .NET
 
+using System.Globalization;
 using Apache.Arrow;
 using Polaire.DataTypes;
 using Polaire.Core;
@@ -261,7 +262,8 @@ public sealed class DateTimeOperations
 
         return TransformDateTime(dt =>
         {
-            var utc = TimeZoneInfo.ConvertTimeToUtc(dt, sourceZone);
+            // Stored values are wall-clock times in fromTz; ConvertTimeToUtc rejects Kind=Utc for other zones
+            var utc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(dt, DateTimeKind.Unspecified), sourceZone);
             return TimeZoneInfo.ConvertTimeFromUtc(utc, destZone);
         });
     }
@@ -275,14 +277,37 @@ public sealed class DateTimeOperations
     // Formatting
     // ============================================================================
 
+    /// <summary>
+    /// Formats values as strings. A format containing '%' uses strftime specifiers as in Polars
+    /// (e.g. "%Y-%m-%d %H:%M:%S"); any other format is a .NET custom format string (e.g. "yyyy-MM-dd").
+    /// </summary>
     public Series Strftime(string format)
     {
-        return TransformToString(dt => dt.ToString(format));
+        if (format.Contains('%'))
+            return TransformToString(dt => ChronoFormat.Format(dt, format));
+        return TransformToString(dt => dt.ToString(format, CultureInfo.InvariantCulture));
     }
 
     public Series ToIsoString()
     {
-        return TransformToString(dt => dt.ToString("o"));
+        return TransformToString(dt => dt.ToString("o", CultureInfo.InvariantCulture));
+    }
+
+    // ============================================================================
+    // Calendar-aware Offsets
+    // ============================================================================
+
+    /// <summary>
+    /// Offsets each value by a Polars duration string: an optional leading '-' followed by one or more
+    /// integer/unit pairs, e.g. "1mo", "-2d12h", "1y3q", "90s". Units: ns, us, ms, s, m, h, d, w, mo, q, y.
+    /// Months, quarters and years are calendar-aware: the day is clamped to the end of the target month
+    /// (2024-01-31 offset by "1mo" is 2024-02-29). The result keeps the input type; for a Date column
+    /// the time of day is dropped.
+    /// </summary>
+    public Series OffsetBy(string by)
+    {
+        var offset = PolarsDuration.Parse(by);
+        return TransformPreservingType(offset.AddTo);
     }
 
     // ============================================================================
@@ -363,12 +388,12 @@ public sealed class DateTimeOperations
         if (_series.DataType is DataType.DateType)
         {
             var data = _series.Data as ChunkedArray<int>;
-            return DateOnly.FromDayNumber(data!.GetValue(index)).ToDateTime(TimeOnly.MinValue);
+            return TemporalConversions.DateFromDays(data!.GetValue(index)).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         }
-        else if (_series.DataType is DataType.DateTimeType)
+        else if (_series.DataType is DataType.DateTimeType dateTimeType)
         {
             var data = _series.Data as ChunkedArray<long>;
-            return new DateTime(data!.GetValue(index), DateTimeKind.Utc);
+            return TemporalConversions.DateTimeFromRaw(data!.GetValue(index), dateTimeType.Unit);
         }
         else
         {
@@ -436,22 +461,42 @@ public sealed class DateTimeOperations
 
     private Series TransformDateTime(Func<DateTime, DateTime> transform)
     {
-        var builder = new TimestampArray.Builder(Apache.Arrow.Types.TimeUnit.Nanosecond);
-
+        var values = new DateTime?[_series.Length];
         for (int i = 0; i < _series.Length; i++)
         {
-            if (_series.IsNull(i))
-            {
-                builder.AppendNull();
-            }
-            else
-            {
-                var transformed = transform(GetDateTime(i));
-                builder.Append(new DateTimeOffset(transformed, TimeSpan.Zero));
-            }
+            if (!_series.IsNull(i))
+                values[i] = transform(GetDateTime(i));
         }
 
-        return Series.FromArrowArray(_series.Name, builder.Build(), DataType.DateTime(TimeUnit.Nanoseconds));
+        return TemporalConversions.DateTimeSeries(_series.Name, values);
+    }
+
+    /// <summary>Applies a transform and returns a column of the input's type (Date or DateTime with the same unit).</summary>
+    private Series TransformPreservingType(Func<DateTime, DateTime> transform)
+    {
+        if (_series.DataType is DataType.DateType)
+        {
+            var dates = new DateOnly?[_series.Length];
+            for (int i = 0; i < _series.Length; i++)
+            {
+                if (!_series.IsNull(i))
+                    dates[i] = DateOnly.FromDateTime(transform(GetDateTime(i)));
+            }
+            return TemporalConversions.DateSeries(_series.Name, dates);
+        }
+
+        if (_series.DataType is DataType.DateTimeType dateTimeType)
+        {
+            var values = new DateTime?[_series.Length];
+            for (int i = 0; i < _series.Length; i++)
+            {
+                if (!_series.IsNull(i))
+                    values[i] = transform(GetDateTime(i));
+            }
+            return TemporalConversions.DateTimeSeries(_series.Name, values, dateTimeType.Unit, dateTimeType.TimeZone);
+        }
+
+        throw new NotSupportedException($"Operation not supported for {_series.DataType}");
     }
 
     private Series TransformToString(Func<DateTime, string> transform)

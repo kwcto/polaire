@@ -105,19 +105,12 @@ public sealed class Series : IEnumerable<AnyValue>
         return FromArrowArray(name, builder.Build(), DataType.String);
     }
 
-    public static Series FromValues(string name, DateOnly[] values)
-    {
-        var builder = new Date32Array.Builder();
-        foreach (var v in values) builder.Append(v.ToDateTime(TimeOnly.MinValue));
-        return FromArrowArray(name, builder.Build(), DataType.Date);
-    }
+    public static Series FromValues(string name, DateOnly[] values) =>
+        TemporalConversions.DateSeries(name, values.Select(v => (DateOnly?)v).ToArray());
 
-    public static Series FromValues(string name, DateTime[] values)
-    {
-        var builder = new TimestampArray.Builder(Apache.Arrow.Types.TimeUnit.Nanosecond);
-        foreach (var v in values) builder.Append(new DateTimeOffset(v, TimeSpan.Zero));
-        return FromArrowArray(name, builder.Build(), DataType.DateTime(DataTypes.TimeUnit.Nanoseconds));
-    }
+    /// <summary>Creates a DateTime(ns) series. Values are stored as wall-clock time; DateTime.Kind is ignored.</summary>
+    public static Series FromValues(string name, DateTime[] values) =>
+        TemporalConversions.DateTimeSeries(name, values.Select(v => (DateTime?)v).ToArray());
 
     /// <summary>Creates a series from nullable values.</summary>
     public static Series FromNullable<T>(string name, T?[] values) where T : struct
@@ -198,25 +191,13 @@ public sealed class Series : IEnumerable<AnyValue>
     private static Series FromNullableDateOnly(string name, DateOnly?[]? values)
     {
         if (values is null) throw new ArgumentNullException(nameof(values));
-        var builder = new Date32Array.Builder();
-        foreach (var v in values)
-        {
-            if (v.HasValue) builder.Append(v.Value.ToDateTime(TimeOnly.MinValue));
-            else builder.AppendNull();
-        }
-        return FromArrowArray(name, builder.Build(), DataType.Date);
+        return TemporalConversions.DateSeries(name, values);
     }
 
     private static Series FromNullableDateTime(string name, DateTime?[]? values)
     {
         if (values is null) throw new ArgumentNullException(nameof(values));
-        var builder = new TimestampArray.Builder(Apache.Arrow.Types.TimeUnit.Nanosecond);
-        foreach (var v in values)
-        {
-            if (v.HasValue) builder.Append(new DateTimeOffset(v.Value, TimeSpan.Zero));
-            else builder.AppendNull();
-        }
-        return FromArrowArray(name, builder.Build(), DataType.DateTime(DataTypes.TimeUnit.Nanoseconds));
+        return TemporalConversions.DateTimeSeries(name, values);
     }
 
     /// <summary>Creates a series from an Arrow array.</summary>
@@ -457,7 +438,8 @@ public sealed class Series : IEnumerable<AnyValue>
             DataType.Float64Type => AnyValue.From(((ChunkedArray<double>)_data).GetValue(index)),
             DataType.BooleanType => AnyValue.From(((ChunkedArray<bool>)_data).GetValue(index)),
             DataType.StringType => AnyValue.From(((StringChunkedArray)_data).GetString(index)),
-            DataType.DateType => AnyValue.From(DateOnly.FromDayNumber(((ChunkedArray<int>)_data).GetValue(index))),
+            DataType.DateType => AnyValue.From(TemporalConversions.DateFromDays(((ChunkedArray<int>)_data).GetValue(index))),
+            DataType.DateTimeType dt => AnyValue.From(TemporalConversions.DateTimeFromRaw(((ChunkedArray<long>)_data).GetValue(index), dt.Unit)),
             _ => AnyValue.Null
         };
     }
@@ -524,6 +506,18 @@ public sealed class Series : IEnumerable<AnyValue>
     {
         return SeriesOperations.Unique(this);
     }
+
+    /// <summary>Counts unique values. Null counts as one distinct value.</summary>
+    public int NUnique() => SeriesOperations.Unique(this).Length;
+
+    /// <summary>Returns a new series with the values of <paramref name="other"/> appended.</summary>
+    public Series Append(Series other) => SeriesOperations.Concat(new[] { this, other });
+
+    /// <summary>
+    /// Concatenates series of the same data type into one series.
+    /// The result takes the name of the first series.
+    /// </summary>
+    public static Series Concat(params Series[] series) => SeriesOperations.Concat(series);
 
     /// <summary>Returns value counts as a DataFrame.</summary>
     public DataFrame ValueCounts()

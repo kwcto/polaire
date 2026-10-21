@@ -36,6 +36,7 @@ public static class ExprEvaluator
             Expr.IsIn isIn => EvaluateIsIn(isIn, df),
             Expr.Between between => EvaluateBetween(between, df),
             Expr.Window window => EvaluateWindow(window, df),
+            Expr.Slice slice => EvaluateSlice(slice, df),
             _ => throw new NotSupportedException($"Expression type not supported: {expr.GetType().Name}")
         };
     }
@@ -72,6 +73,8 @@ public static class ExprEvaluator
             AnyValueKind.Float64 => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsFloat64(), length).ToArray()),
             AnyValueKind.Boolean => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsBoolean(), length).ToArray()),
             AnyValueKind.String => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsString(), length).ToArray()),
+            AnyValueKind.Date => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsDate(), length).ToArray()),
+            AnyValueKind.DateTime => Series.FromValues("literal", Enumerable.Repeat(lit.Value.AsDateTime(), length).ToArray()),
             _ => Series.FromValues("literal", Enumerable.Repeat(lit.Value.ToString(), length).ToArray())
         };
     }
@@ -272,7 +275,7 @@ public static class ExprEvaluator
             }
         }
 
-        return BuildSeriesFromAnyValues(thenResult.Name, values, thenResult.DataType);
+        return SeriesOperations.FromAnyValues(thenResult.Name, values, thenResult.DataType);
     }
 
     // ============================================================================
@@ -295,6 +298,10 @@ public static class ExprEvaluator
             "row_number" => Series.FromValues("row_number", Enumerable.Range(0, df.Height).ToArray()),
             "arange" when func.Args.Count >= 2 =>
                 EvaluateArange(func.Args[0], func.Args[1], func.Args.Count > 2 ? func.Args[2] : null, df),
+            "sum_horizontal" => HorizontalOperations.Sum(Evaluate(func.Args, df)),
+            "mean_horizontal" => HorizontalOperations.Mean(Evaluate(func.Args, df)),
+            "min_horizontal" => HorizontalOperations.Min(Evaluate(func.Args, df)),
+            "max_horizontal" => HorizontalOperations.Max(Evaluate(func.Args, df)),
             _ => throw new NotSupportedException($"Function not supported: {func.Name}")
         };
     }
@@ -418,6 +425,24 @@ public static class ExprEvaluator
     }
 
     // ============================================================================
+    // Slice
+    // ============================================================================
+
+    private static Series EvaluateSlice(Expr.Slice slice, DataFrame df)
+    {
+        var inner = Evaluate(slice.Inner, df);
+        var len = (long)inner.Length;
+
+        // Polars slice_offsets: resolve a negative offset from the end, then clip both bounds
+        var start = slice.Offset < 0 ? slice.Offset + len : slice.Offset;
+        var stop = start + (slice.Length ?? inner.Length);
+        start = Math.Clamp(start, 0, len);
+        stop = Math.Clamp(stop, 0, len);
+
+        return inner.Slice((int)start, (int)Math.Max(0, stop - start));
+    }
+
+    // ============================================================================
     // String Operations
     // ============================================================================
 
@@ -438,6 +463,7 @@ public static class ExprEvaluator
             StringOp.Lengths => strOps.Lengths(),
             StringOp.Substring s => strOps.Substring(s.Start, s.Length),
             StringOp.Extract e => strOps.Extract(e.Pattern, e.Group),
+            StringOp.Strptime p => strOps.Strptime(p.Target, p.Format, p.Strict),
             _ => throw new NotSupportedException($"String operation not supported: {str.Operation}")
         };
     }
@@ -463,6 +489,8 @@ public static class ExprEvaluator
             DateTimeOp.DayOfYear => dtOps.DayOfYear(),
             DateTimeOp.WeekOfYear => dtOps.WeekOfYear(),
             DateTimeOp.Quarter => dtOps.Quarter(),
+            DateTimeOp.OffsetBy o => dtOps.OffsetBy(o.By),
+            DateTimeOp.Strftime f => dtOps.Strftime(f.Format),
             _ => throw new NotSupportedException($"DateTime operation not supported: {dt.Operation}")
         };
     }
@@ -487,30 +515,6 @@ public static class ExprEvaluator
         var lower = Evaluate(between.Lower, df)[0];
         var upper = Evaluate(between.Upper, df)[0];
         return inner.Between(lower, upper, between.Inclusive);
-    }
-
-    // ============================================================================
-    // Helpers
-    // ============================================================================
-
-    private static Series BuildSeriesFromAnyValues(string name, List<AnyValue> values, DataType dtype)
-    {
-        return dtype switch
-        {
-            DataType.Int32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (int?)v.AsInt32()).ToArray()),
-            DataType.Int64Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (long?)v.AsInt64()).ToArray()),
-            DataType.Float32Type => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (float?)v.AsFloat32()).ToArray()),
-            DataType.Float64Type => Series.FromNullable(name, values.Select(v =>
-            {
-                if (v.IsNull) return null;
-                if (v.TryGetDouble(out var d)) return (double?)d;
-                if (v.TryGetInt64(out var l)) return (double?)l;
-                return null;
-            }).ToArray()),
-            DataType.BooleanType => Series.FromNullable(name, values.Select(v => v.IsNull ? null : (bool?)v.AsBoolean()).ToArray()),
-            DataType.StringType => Series.FromValues(name, values.Select(v => v.IsNull ? null : v.AsString()).ToArray()),
-            _ => Series.FromValues(name, values.Select(v => v.ToString()).ToArray())
-        };
     }
 
     // ============================================================================
@@ -561,7 +565,7 @@ public static class ExprEvaluator
             }
         }
 
-        return BuildSeriesFromAnyValues(resultName, result.ToList(), resultType);
+        return SeriesOperations.FromAnyValues(resultName, result, resultType);
     }
 
     private static Dictionary<string, List<int>> ComputePartitionGroups(Series[] partitionKeys, int height)

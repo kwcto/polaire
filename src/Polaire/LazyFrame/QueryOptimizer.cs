@@ -467,6 +467,31 @@ public static class QueryOptimizer
             case Expr.Dt dt:
                 CollectColumns(dt.Inner, columns);
                 break;
+            case Expr.Slice slice:
+                CollectColumns(slice.Inner, columns);
+                break;
+            case Expr.Window window:
+                CollectColumns(window.Inner, columns);
+                foreach (var partition in window.PartitionBy)
+                    CollectColumns(partition, columns);
+                foreach (var order in window.OrderBy ?? Array.Empty<SortExpr>())
+                    CollectColumns(order.Inner, columns);
+                break;
+            case Expr.Take take:
+                CollectColumns(take.Inner, columns);
+                CollectColumns(take.Indices, columns);
+                break;
+            case Expr.StructField field:
+                CollectColumns(field.Inner, columns);
+                break;
+            case Expr.ListGet listGet:
+                CollectColumns(listGet.Inner, columns);
+                break;
+            case Expr.IfThenElse ifThenElse:
+                CollectColumns(ifThenElse.Condition, columns);
+                CollectColumns(ifThenElse.Then, columns);
+                CollectColumns(ifThenElse.Else, columns);
+                break;
         }
     }
 }

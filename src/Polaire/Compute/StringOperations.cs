@@ -1,6 +1,7 @@
 // Licensed under the MIT License.
 // Polaire - High-performance DataFrame library for .NET
 
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Apache.Arrow;
 using Polaire.DataTypes;
@@ -457,6 +458,77 @@ public sealed class StringOperations
             if (actualStart >= actualEnd) return "";
             return s.Substring(actualStart, actualEnd - actualStart);
         });
+    }
+
+    // ============================================================================
+    // Temporal Parsing
+    // ============================================================================
+
+    /// <summary>
+    /// Parses strings into a Date or DateTime column (Polars str.strptime).
+    /// A format containing '%' uses strftime specifiers as in Polars (e.g. "%Y-%m-%d %H:%M:%S%.f"),
+    /// any other format is a .NET custom format string, and a null format accepts ISO 8601 and other
+    /// invariant-culture formats. Values with a UTC offset are converted to UTC; values without one are
+    /// kept as written. With <paramref name="strict"/> set, a value that fails to parse raises
+    /// FormatException; otherwise it becomes null. Parsing to Date drops the time of day.
+    /// </summary>
+    public Series Strptime(DataType dtype, string? format = null, bool strict = true)
+    {
+        if (dtype is not DataType.DateType and not DataType.DateTimeType)
+            throw new ArgumentException($"Strptime target must be Date or DateTime, got {dtype}", nameof(dtype));
+
+        var data = _series.Data as StringChunkedArray;
+        var parsed = new DateTime?[_series.Length];
+        var examples = new List<string>();
+        int failures = 0;
+
+        for (int i = 0; i < _series.Length; i++)
+        {
+            if (_series.IsNull(i)) continue;
+
+            var text = data!.GetString(i)!;
+            if (TryParseTemporal(text, format, out var value))
+            {
+                parsed[i] = value;
+            }
+            else
+            {
+                failures++;
+                if (examples.Count < 5) examples.Add($"\"{text}\"");
+            }
+        }
+
+        if (strict && failures > 0)
+        {
+            throw new FormatException(
+                $"Conversion from String to {dtype} failed in column '{_series.Name}' for {failures} of {_series.Length} values: " +
+                $"[{string.Join(", ", examples)}{(failures > examples.Count ? ", ..." : "")}]. " +
+                $"{(format is null ? "Pass a format" : $"Check the format \"{format}\"")}, or pass strict: false to return null for these values.");
+        }
+
+        if (dtype is DataType.DateTimeType dateTimeType)
+            return TemporalConversions.DateTimeSeries(_series.Name, parsed, dateTimeType.Unit, dateTimeType.TimeZone);
+
+        return TemporalConversions.DateSeries(_series.Name,
+            parsed.Select(v => v.HasValue ? DateOnly.FromDateTime(v.Value) : (DateOnly?)null).ToArray());
+    }
+
+    /// <summary>Parses strings into a Date column. See <see cref="Strptime"/>.</summary>
+    public Series ToDate(string? format = null, bool strict = true) => Strptime(DataType.Date, format, strict);
+
+    /// <summary>Parses strings into a DateTime column with the given unit. See <see cref="Strptime"/>.</summary>
+    public Series ToDatetime(string? format = null, bool strict = true, TimeUnit timeUnit = TimeUnit.Nanoseconds) =>
+        Strptime(DataType.DateTime(timeUnit), format, strict);
+
+    private static bool TryParseTemporal(string text, string? format, out DateTime value)
+    {
+        const DateTimeStyles styles = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
+
+        if (format is null)
+            return DateTime.TryParse(text, CultureInfo.InvariantCulture, styles, out value);
+        if (format.Contains('%'))
+            return ChronoFormat.TryParse(text, format, out value);
+        return DateTime.TryParseExact(text, format, CultureInfo.InvariantCulture, styles, out value);
     }
 
     // ============================================================================

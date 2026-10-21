@@ -439,7 +439,7 @@ public static class SeriesAggregations
                 }
             }
         }
-        return found ? AnyValue.From(DateOnly.FromDayNumber(min)) : AnyValue.Null;
+        return found ? AnyValue.From(TemporalConversions.DateFromDays(min)) : AnyValue.Null;
     }
 
     private static AnyValue MinGeneric(Series series)

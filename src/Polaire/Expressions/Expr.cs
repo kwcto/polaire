@@ -191,6 +191,7 @@ public abstract record Expr
         bool b => new Literal(AnyValue.From(b)),
         string s => new Literal(AnyValue.From(s)),
         DateTime dt => new Literal(AnyValue.From(dt)),
+        DateOnly d => new Literal(AnyValue.From(d)),
         AnyValue av => new Literal(av),
         _ => new Literal(AnyValue.From(value.ToString()))
     };
@@ -216,6 +217,26 @@ public abstract record Expr
         new Function("concat_str", new[] { separator }.Concat(exprs).ToArray());
 
     // ============================================================================
+    // Horizontal (row-wise) Functions
+    // ============================================================================
+
+    /// <summary>Row-wise sum across numeric expressions. Nulls are ignored; an all-null row sums to 0.</summary>
+    public static Expr SumHorizontal(params Expr[] exprs) => new Function("sum_horizontal", exprs);
+    public static Expr SumHorizontal(params string[] columns) => SumHorizontal(Cols(columns));
+
+    /// <summary>Row-wise mean across numeric expressions. Nulls are ignored; an all-null row is null.</summary>
+    public static Expr MeanHorizontal(params Expr[] exprs) => new Function("mean_horizontal", exprs);
+    public static Expr MeanHorizontal(params string[] columns) => MeanHorizontal(Cols(columns));
+
+    /// <summary>Row-wise minimum across numeric expressions. Nulls are ignored; an all-null row is null.</summary>
+    public static Expr MinHorizontal(params Expr[] exprs) => new Function("min_horizontal", exprs);
+    public static Expr MinHorizontal(params string[] columns) => MinHorizontal(Cols(columns));
+
+    /// <summary>Row-wise maximum across numeric expressions. Nulls are ignored; an all-null row is null.</summary>
+    public static Expr MaxHorizontal(params Expr[] exprs) => new Function("max_horizontal", exprs);
+    public static Expr MaxHorizontal(params string[] columns) => MaxHorizontal(Cols(columns));
+
+    // ============================================================================
     // Fluent Methods
     // ============================================================================
 
@@ -234,6 +255,12 @@ public abstract record Expr
 
     /// <summary>Window function over partitions.</summary>
     public Expr Over(params Expr[] partitionBy) => new Window(this, partitionBy);
+
+    /// <summary>
+    /// Slices the expression result. A negative offset counts from the end; a null length
+    /// takes all remaining values. Out-of-range bounds are clipped (Polars semantics).
+    /// </summary>
+    public Expr SliceExpr(int offset, int? length = null) => new Slice(this, offset, length);
 
     /// <summary>Filters with between.</summary>
     public Expr IsBetween(Expr lower, Expr upper, bool inclusive = true) => new Between(this, lower, upper, inclusive);
@@ -531,6 +558,13 @@ public class StringExprBuilder
     public Expr Lengths() => new Expr.Str(_inner, new StringOp.Lengths());
     public Expr Substring(int start, int? length = null) => new Expr.Str(_inner, new StringOp.Substring(start, length));
     public Expr Extract(string pattern, int group = 0) => new Expr.Str(_inner, new StringOp.Extract(pattern, group));
+
+    /// <summary>Parses strings into a Date or DateTime column. See <see cref="Compute.StringOperations.Strptime"/>.</summary>
+    public Expr Strptime(DataType dtype, string? format = null, bool strict = true) =>
+        new Expr.Str(_inner, new StringOp.Strptime(dtype, format, strict));
+    public Expr ToDate(string? format = null, bool strict = true) => Strptime(DataType.Date, format, strict);
+    public Expr ToDatetime(string? format = null, bool strict = true, TimeUnit timeUnit = TimeUnit.Nanoseconds) =>
+        Strptime(DataType.DateTime(timeUnit), format, strict);
 }
 
 /// <summary>Builder for datetime expressions.</summary>
@@ -553,6 +587,12 @@ public class DateTimeExprBuilder
     public Expr DayOfYear() => new Expr.Dt(_inner, new DateTimeOp.DayOfYear());
     public Expr WeekOfYear() => new Expr.Dt(_inner, new DateTimeOp.WeekOfYear());
     public Expr Quarter() => new Expr.Dt(_inner, new DateTimeOp.Quarter());
+
+    /// <summary>Offsets by a Polars duration string such as "1mo", "-2d12h" or "1y3q".</summary>
+    public Expr OffsetBy(string by) => new Expr.Dt(_inner, new DateTimeOp.OffsetBy(by));
+
+    /// <summary>Formats as strings. Formats containing '%' use strftime specifiers; others use .NET format strings.</summary>
+    public Expr Strftime(string format) => new Expr.Dt(_inner, new DateTimeOp.Strftime(format));
 }
 
 /// <summary>Sort expression with direction.</summary>
@@ -625,6 +665,7 @@ public abstract record StringOp
     public sealed record Lengths : StringOp { public override string ToString() => "lengths()"; }
     public sealed record Substring(int Start, int? Length) : StringOp { public override string ToString() => $"slice({Start}, {Length})"; }
     public sealed record Extract(string Pattern, int Group) : StringOp { public override string ToString() => $"extract(\"{Pattern}\", {Group})"; }
+    public sealed record Strptime(DataType Target, string? Format, bool Strict) : StringOp { public override string ToString() => $"strptime({Target}, \"{Format}\")"; }
 }
 
 /// <summary>DateTime operations.</summary>
@@ -640,4 +681,6 @@ public abstract record DateTimeOp
     public sealed record DayOfYear : DateTimeOp { public override string ToString() => "ordinal_day()"; }
     public sealed record WeekOfYear : DateTimeOp { public override string ToString() => "week()"; }
     public sealed record Quarter : DateTimeOp { public override string ToString() => "quarter()"; }
+    public sealed record OffsetBy(string By) : DateTimeOp { public override string ToString() => $"offset_by(\"{By}\")"; }
+    public sealed record Strftime(string Format) : DateTimeOp { public override string ToString() => $"strftime(\"{Format}\")"; }
 }

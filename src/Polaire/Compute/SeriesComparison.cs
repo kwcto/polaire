@@ -336,9 +336,27 @@ public static class SeriesComparison
             return stringOp(leftStr, rightStr);
         }
 
-        // Fallback to AnyValue comparison
+        // A Date compares with a DateTime as midnight of that day
+        if (left.Kind == AnyValueKind.Date && right.Kind == AnyValueKind.DateTime)
+            left = AnyValue.From(left.AsDate().ToDateTime(TimeOnly.MinValue));
+        else if (left.Kind == AnyValueKind.DateTime && right.Kind == AnyValueKind.Date)
+            right = AnyValue.From(right.AsDate().ToDateTime(TimeOnly.MinValue));
+
+        // Same-kind values (dates, datetimes, booleans, unsigned integers) and mixed numeric
+        // kinds compare by their natural order; applying the operator to (cmp, 0) gives its result.
+        if (left.Kind == right.Kind || (IsNumericKind(left.Kind) && IsNumericKind(right.Kind)))
+        {
+            return int64Op(left.CompareTo(right), 0);
+        }
+
+        // Incompatible kinds are never equal
         return left.Equals(right);
     }
+
+    private static bool IsNumericKind(AnyValueKind kind) =>
+        kind is AnyValueKind.Int8 or AnyValueKind.Int16 or AnyValueKind.Int32 or AnyValueKind.Int64
+            or AnyValueKind.UInt8 or AnyValueKind.UInt16 or AnyValueKind.UInt32 or AnyValueKind.UInt64
+            or AnyValueKind.Float32 or AnyValueKind.Float64;
 
     private static void ValidateShapes(Series left, Series right)
     {

@@ -315,12 +315,7 @@ public class IOExtendedTests
         }
     }
 
-    // ============================================================================
-    // JSON Tests (Read-only - no WriteJson available)
-    // ============================================================================
-
-    // Note: JSON read is available via ReadJson, but WriteJson is not implemented.
-    // NDJSON tests use ScanNdjson instead.
+    // JSON and NDJSON write and round-trip tests are in JsonWriterTests.
 
     // ============================================================================
     // Lazy Scan Tests
@@ -404,9 +399,6 @@ public class IOExtendedTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
-
-    // Note: ScanNdjson requires a file to exist, which would need WriteNdjson.
-    // Skip NDJSON write tests since WriteNdjson is not available.
 
     // ============================================================================
     // Null Handling Tests

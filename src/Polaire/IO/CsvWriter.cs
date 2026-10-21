@@ -144,29 +144,12 @@ public static class CsvWriter
 
     private static string FormatDate(AnyValue value, CsvWriteOptions options)
     {
-        // AnyValue stores dates as long (ticks or days from epoch)
-        // Try to extract as string and format
-        var str = value.ToString();
-        if (str != null && DateTime.TryParse(str, out var dt))
-        {
-            var dateOnly = DateOnly.FromDateTime(dt);
-            return options.DateFormat != null
-                ? dateOnly.ToString(options.DateFormat, CultureInfo.InvariantCulture)
-                : dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        }
-        return str ?? "";
+        return value.AsDate().ToString(options.DateFormat ?? "yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
     private static string FormatDateTime(AnyValue value, CsvWriteOptions options)
     {
-        var str = value.ToString();
-        if (str != null && DateTime.TryParse(str, out var dt))
-        {
-            return options.DateTimeFormat != null
-                ? dt.ToString(options.DateTimeFormat, CultureInfo.InvariantCulture)
-                : dt.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-        }
-        return str ?? "";
+        return value.AsDateTime().ToString(options.DateTimeFormat ?? "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 
     private static bool NeedsQuoting(string value, char sep, char quote)

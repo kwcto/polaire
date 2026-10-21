@@ -162,6 +162,22 @@ public static class Pl
     /// <summary>Count expression.</summary>
     public static Expr Count() => Expr.Count();
 
+    /// <summary>Row-wise sum across expressions (nulls ignored).</summary>
+    public static Expr SumHorizontal(params Expr[] exprs) => Expr.SumHorizontal(exprs);
+    public static Expr SumHorizontal(params string[] columns) => Expr.SumHorizontal(columns);
+
+    /// <summary>Row-wise mean across expressions (nulls ignored).</summary>
+    public static Expr MeanHorizontal(params Expr[] exprs) => Expr.MeanHorizontal(exprs);
+    public static Expr MeanHorizontal(params string[] columns) => Expr.MeanHorizontal(columns);
+
+    /// <summary>Row-wise minimum across expressions (nulls ignored).</summary>
+    public static Expr MinHorizontal(params Expr[] exprs) => Expr.MinHorizontal(exprs);
+    public static Expr MinHorizontal(params string[] columns) => Expr.MinHorizontal(columns);
+
+    /// <summary>Row-wise maximum across expressions (nulls ignored).</summary>
+    public static Expr MaxHorizontal(params Expr[] exprs) => Expr.MaxHorizontal(exprs);
+    public static Expr MaxHorizontal(params string[] columns) => Expr.MaxHorizontal(columns);
+
     // ============================================================================
     // IO - CSV
     // ============================================================================
@@ -294,5 +310,41 @@ public static class PolaireExtensions
     public static void WriteParquet(this DataFrame df, Stream stream, ParquetWriteOptions? options = null)
     {
         ParquetWriter.Write(df, stream, options);
+    }
+
+    /// <summary>Writes the DataFrame to a JSON file as an array of row objects.</summary>
+    public static void WriteJson(this DataFrame df, string path)
+    {
+        JsonWriter.Write(df, path);
+    }
+
+    /// <summary>Writes the DataFrame to a JSON stream as an array of row objects.</summary>
+    public static void WriteJson(this DataFrame df, Stream stream)
+    {
+        JsonWriter.Write(df, stream);
+    }
+
+    /// <summary>Converts the DataFrame to a JSON string (an array of row objects).</summary>
+    public static string ToJson(this DataFrame df)
+    {
+        return JsonWriter.WriteString(df);
+    }
+
+    /// <summary>Writes the DataFrame to an NDJSON file, one row object per line.</summary>
+    public static void WriteNdjson(this DataFrame df, string path)
+    {
+        JsonWriter.WriteNdjson(df, path);
+    }
+
+    /// <summary>Writes the DataFrame to an NDJSON stream, one row object per line.</summary>
+    public static void WriteNdjson(this DataFrame df, Stream stream)
+    {
+        JsonWriter.WriteNdjson(df, stream);
+    }
+
+    /// <summary>Converts the DataFrame to an NDJSON string, one row object per line.</summary>
+    public static string ToNdjson(this DataFrame df)
+    {
+        return JsonWriter.WriteNdjsonString(df);
     }
 }

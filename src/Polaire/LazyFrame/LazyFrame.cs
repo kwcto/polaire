@@ -102,6 +102,9 @@ public sealed class LazyFrame
         return new LazyFrame(new LogicalPlan.Limit(_plan, n));
     }
 
+    /// <summary>Gets the first n rows. Alias for <see cref="Head"/>.</summary>
+    public LazyFrame Limit(int n) => Head(n);
+
     /// <summary>Gets the last n rows.</summary>
     public LazyFrame Tail(int n)
     {

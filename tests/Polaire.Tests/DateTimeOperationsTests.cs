@@ -9,9 +9,8 @@ using Xunit;
 namespace Polaire.Tests;
 
 /// <summary>
-/// Tests for DateTimeOperations.
-/// Note: DateTime transformation operations (AddDays, TruncateToX, etc.) have known issues
-/// with timestamp storage/retrieval overflow. Extraction operations (Year, Month, etc.) work correctly.
+/// Tests for DateTimeOperations (mostly result types and lengths).
+/// Value-level checks are in TemporalCorrectnessTests and TemporalParsingFormattingTests.
 /// </summary>
 public class DateTimeOperationsTests
 {
