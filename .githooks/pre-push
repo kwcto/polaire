@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+# Git supplies every outgoing ref on stdin, including non-HEAD branches and tags.
+# Scan all ancestry, so deleting a secret in a later commit cannot hide it.
+set --
+while read -r local_ref local_sha remote_ref remote_sha extra; do
+    if [[ -z "$local_ref" || -z "$remote_ref" || -z "$remote_sha" || -n "$extra" ]] ||
+        [[ ! "$local_sha" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+        printf '%s\n' 'Invalid pre-push input; secret scan stopped.' >&2
+        exit 1
+    fi
+    # A deleted remote ref sends no local objects.
+    [[ "$local_sha" =~ ^0+$ ]] && continue
+    set -- "$@" "$local_sha"
+done
+[[ $# -gt 0 ]] || exit 0
+exec "$repo_root/scripts/check-secrets.sh" history "$@"

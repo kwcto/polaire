@@ -187,6 +187,40 @@ Contributions toward correctness, feature completeness, performance and document
 
 Use [AGENTS.md](AGENTS.md) for project objectives and working guidance, [CLAUDE.md](CLAUDE.md) for API gotchas and implementation lessons, and the [feature gap analysis](docs/FEATURE_GAP_ANALYSIS.md) for remaining work. Keep documentation aligned with verified behavior.
 
+### Secret checks and commit privacy
+
+Install the pinned [Gitleaks](https://github.com/gitleaks/gitleaks) scanner and enable
+the local hooks once per clone on macOS or Linux:
+
+```bash
+bash scripts/install-gitleaks.sh
+bash scripts/setup-hooks.sh
+```
+
+The installer verifies the release archive against a pinned SHA-256 checksum and
+keeps the executable inside Git's local metadata directory. The hooks require the
+installed scanner; they do not download software during a commit or push.
+
+The pre-commit hook checks staged changes. The pre-push hook checks the full history
+reachable from each commit being pushed, so committing a secret and then deleting
+it does not hide it. Findings are redacted. Missing tools or scanner errors block
+the operation. You can also run the checks explicitly:
+
+```bash
+bash scripts/check-secrets.sh staged
+bash scripts/check-secrets.sh history
+```
+
+[GitHub Actions](.github/workflows/secret-scan.yml) repeats the history scan on pushes
+and pull requests. That check runs after upload; local hooks provide the check
+before upload. Hooks must be enabled separately in each clone, and pattern-based
+scanning does not replace reviewing the staged diff for private information.
+
+Use your [GitHub no-reply email](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address)
+for public commits. Configure it per repository with `git config --local user.email`
+and your account's no-reply address. This changes future commits; it does not remove
+personal email addresses from existing history.
+
 ## License
 
 MIT License — see [LICENSE](LICENSE).

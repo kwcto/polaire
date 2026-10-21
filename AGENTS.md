@@ -34,6 +34,10 @@ Familiarity with Polars should transfer, while the API should feel natural in .N
   avoid conflicting edits.
 - **Keep local configuration private.** This is a public repository.
   `.claude/settings.local.json` must remain ignored and must not be committed.
+- **Use the maintainer's GitHub no-reply identity for future commits.** This
+  repository is configured locally for that purpose. Check the effective author
+  and committer identities before committing; do not substitute a personal email.
+  Changes to global identity or existing published history need separate direction.
 
 These directions were recovered from the January 2026 project prompt history
 and the October 2026 sessions. Historical assistant proposals, rough estimates,
@@ -121,6 +125,15 @@ Warnings are treated as errors (missing XML documentation warnings are suppresse
 Run checks appropriate to the change; report what ran and any limitations. Build
 before using `dotnet test --no-build`. For README/API examples, compile and exercise
 the example against the current public API when changing its behavior or syntax.
+
+Secret checks use pinned, checksum-verified Gitleaks. For a new clone, run
+`bash scripts/install-gitleaks.sh` and `bash scripts/setup-hooks.sh`. The pre-commit
+hook checks the index; the pre-push hook checks the history reachable from each
+outgoing commit. GitHub Actions repeats the history scan after upload. Run
+`bash scripts/check-secrets.sh staged` or `bash scripts/check-secrets.sh history`
+explicitly when needed. Do not bypass a failing check; investigate and remove
+credentials from the commits being published. Keep findings redacted, and review
+the actual staged diff for private information that a pattern scanner may miss.
 
 Historical M1 Max results demonstrate competitiveness on selected basic Float64
 aggregations, not performance parity across the library. The Python comparison
