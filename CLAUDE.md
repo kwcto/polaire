@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2666 passing, 0 failing, 12 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
+- **Tests:** 2666 passing, 0 failing, 14 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
 - **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
@@ -146,6 +146,7 @@ Found by porting upstream tests. The skipped cases in `UpstreamTemporalNamespace
 - `Dt.MonthStart()` and `Dt.MonthEnd()` drop the time of day, and `MonthEnd` returns 23:59:59.999; Polars keeps the time of day.
 - Duration strings with a leading `+` are rejected; Polars accepts one.
 - `Series.Mean()` throws `NotSupportedException` for Date and DateTime columns, and `Series.Median()` silently returns null for them; Polars returns a Datetime for both.
+- A lazy `Select` that contains only literals returns zero rows; Polars returns one row. Literals are sized by the input frame's height, and that frame reaches the evaluator empty, probably because projection pushdown prunes every column. Selecting a column alongside the literal gives the expected value.
 - `Dt.DayOfWeek()` uses .NET numbering (Sunday = 0); Polars `weekday()` uses Monday = 1 to Sunday = 7.
 
 ## Critical Bug Fixes

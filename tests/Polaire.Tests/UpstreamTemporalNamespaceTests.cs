@@ -715,4 +715,43 @@ public class UpstreamTemporalNamespaceTests
         nulls.Mean().IsNull.Should().BeTrue();
         nulls.Median().IsNull.Should().BeTrue();
     }
+
+    // ============================================================================
+    // test_datetime.py: test_literal_from_date (dtype=pl.Date) and test_literal_from_datetime
+    // (dtype=pl.Datetime, no time zone). Adaptation: Polaire has no frame-less pl.select and Lit takes no
+    // dtype, so the literal is selected from a one-row frame and its inferred type is checked. The cases
+    // that cast through an explicit dtype or a time zone have no counterpart yet.
+    // ============================================================================
+
+    private const string LoneLiteralSelectIsEmpty =
+        "A lazy Select of only literals returns 0 rows in Polaire; Polars returns 1 row";
+
+    private static Series SelectLiteral(object value) =>
+        new DataFrame(Series.FromValues("x", new[] { 0 })).Lazy().Select(Pl.Lit(value).As("literal")).Collect()["literal"];
+
+    [Theory(Skip = LoneLiteralSelectIsEmpty)]
+    [InlineData(1677, 9, 22)]
+    [InlineData(1970, 1, 1)]
+    [InlineData(2024, 2, 29)]
+    public void LiteralFromDate(int y, int m, int d)
+    {
+        var literal = SelectLiteral(new DateOnly(y, m, d));
+
+        literal.DataType.Should().Be(DataType.Date);
+        literal.Length.Should().Be(1);
+        literal[0].AsDate().Should().Be(new DateOnly(y, m, d));
+    }
+
+    [Theory(Skip = LoneLiteralSelectIsEmpty)]
+    [InlineData(1677, 9, 22)]
+    [InlineData(1970, 1, 1)]
+    [InlineData(2024, 2, 29)]
+    public void LiteralFromDatetime(int y, int m, int d)
+    {
+        var literal = SelectLiteral(Dt(y, m, d));
+
+        literal.DataType.Should().Be(DataType.DateTime(TimeUnit.Nanoseconds));
+        literal.Length.Should().Be(1);
+        literal[0].AsDateTime().Should().Be(Dt(y, m, d));
+    }
 }
