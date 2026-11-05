@@ -754,4 +754,34 @@ public class UpstreamTemporalNamespaceTests
         literal.Length.Should().Be(1);
         literal[0].AsDateTime().Should().Be(Dt(y, m, d));
     }
+
+    private const string IntegerToTemporalCastMissing =
+        "Blocked: Polaire Series.Cast does not convert integers to Date or DateTime (NotSupportedException)";
+
+    // test_out_of_range_date_year_11991: out-of-range dates must give null, not wrong values or a panic.
+    [Fact(Skip = IntegerToTemporalCastMissing)]
+    public void OutOfRangeDateYear()
+    {
+        var s = Series.FromValues("a", new[] { -96_465_659 }).Cast(DataType.Date);
+
+        s.Dt.Year()[0].IsNull.Should().BeTrue();
+        s.Dt.IsLeapYear()[0].IsNull.Should().BeTrue();
+    }
+
+    // test_dt_extract_present_out_of_range_27862 (tz=None): a present timestamp beyond the representable range
+    // must give null from the component extractors.
+    [Theory(Skip = IntegerToTemporalCastMissing)]
+    [InlineData("day")]
+    [InlineData("month")]
+    [InlineData("year")]
+    [InlineData("hour")]
+    [InlineData("minute")]
+    [InlineData("second")]
+    public void DtExtractPresentOutOfRange(string method)
+    {
+        var s = Series.FromValues("a", new[] { 9_000_000_000_000_000_000L }).Cast(DataType.DateTime(TimeUnit.Microseconds));
+
+        s.NullCount.Should().Be(0);
+        Component(s, method)[0].IsNull.Should().BeTrue();
+    }
 }

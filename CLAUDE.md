@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2666 passing, 0 failing, 14 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
+- **Tests:** 2666 passing, 0 failing, 16 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
 - **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
@@ -135,6 +135,7 @@ Pl.SumHorizontal("a", "b")      // Also MeanHorizontal, MinHorizontal, MaxHorizo
 - `Time` and `Duration` columns (the types exist, but series construction and operations don't)
 - Parquet writer: Date/DateTime columns are written as strings; Int8/Int16/UInt columns throw `InvalidCastException`
 - Concatenating List/Struct columns (`Series.Concat` throws `NotSupportedException`)
+- Casting integers to Date/DateTime (`Series.Cast` throws `NotSupportedException`)
 - Streaming execution, IPC/Arrow files, GPU acceleration
 
 ## Known Divergences From Polars
