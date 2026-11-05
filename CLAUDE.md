@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2645 passing, 0 failing, 5 skipped (upstream expectations Polaire does not meet; see `UpstreamTemporalNamespaceTests`)
+- **Tests:** 2665 passing, 0 failing, 8 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
 - **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
@@ -137,6 +137,16 @@ Pl.SumHorizontal("a", "b")      // Also MeanHorizontal, MinHorizontal, MaxHorizo
 - Concatenating List/Struct columns (`Series.Concat` throws `NotSupportedException`)
 - Streaming execution, IPC/Arrow files, GPU acceleration
 
+## Known Divergences From Polars
+
+Found by porting upstream tests. The skipped cases in `UpstreamTemporalNamespaceTests` keep the upstream expectations.
+
+- `Dt.Floor`, `Dt.Round` and `Dt.Ceiling` count intervals from 0001-01-01; Polars counts from the Unix epoch. Intervals that do not divide the 719,162 days between those origins (for example 5h, 3d, 7d) give different results.
+- `Dt.Microsecond()` and `Dt.Nanosecond()` return the .NET component within the millisecond or microsecond; Polars returns the sub-second total.
+- `Dt.MonthStart()` and `Dt.MonthEnd()` drop the time of day, and `MonthEnd` returns 23:59:59.999; Polars keeps the time of day.
+- Duration strings with a leading `+` are rejected; Polars accepts one.
+- `Dt.DayOfWeek()` uses .NET numbering (Sunday = 0); Polars `weekday()` uses Monday = 1 to Sunday = 7.
+
 ## Critical Bug Fixes
 
 ### Temporal Epoch Handling (Session 16)
@@ -232,4 +242,4 @@ sum = p2.GetElement(0);
 | 14 | 2293 | Rank/Interpolate expression methods (RowNumber, OrdinalRank, FillForward, etc.) |
 | 15 | 2335 | SQL interface (SqlContext, DataFrame.Sql) |
 | 16 | 2527 | Date/DateTime epoch fix; JSON/NDJSON writers; Strptime/Strftime (chrono formats), OffsetBy; horizontal functions; SliceExpr; Series.Concat/Append/NUnique; VStack/HStack; LazyFrame.Limit |
-| 17 | 2645 | Value-level `Series.Dt` tests (`DtNamespaceValueTests`); ports from upstream `temporal/test_datetime.py` at py-2.0.0 with recorded adaptations (`UpstreamTemporalNamespaceTests`) |
+| 17 | 2665 | Value-level `Series.Dt` tests (`DtNamespaceValueTests`); ports from upstream `temporal/` tests (test_datetime, test_offset_by, test_month_start_end, test_truncate, test_round) at py-2.0.0 with recorded adaptations (`UpstreamTemporalNamespaceTests`) |

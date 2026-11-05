@@ -524,4 +524,126 @@ public class UpstreamTemporalNamespaceTests
         DateOnly.FromDateTime(result[0].AsDateTime()).Should().Be(new DateOnly(2022, 3, 31));
         result[0].AsDateTime().Should().Be(Dt(2022, 3, 31, 23, 59, 59).AddMilliseconds(999));
     }
+
+    // ============================================================================
+    // py-polars/tests/unit/operations/namespaces/temporal/test_truncate.py (py-2.0.0)
+    // Polars truncate takes a duration string. Polaire has Floor(TimeSpan) for fixed durations and
+    // TruncateToMonth/TruncateToDay for calendar units. Calendar multiples ("11q", "3y", "5mo"), per-row
+    // duration columns, error cases and the hypothesis property tests have no Polaire counterpart yet.
+    // ============================================================================
+
+    private static Series InUnit(TimeUnit unit, params string[] values) =>
+        Series.FromValues("a", values).Str.ToDatetime(timeUnit: unit);
+
+    // test_truncate_datetime_simple
+    [Theory]
+    [InlineData(TimeUnit.Milliseconds)]
+    [InlineData(TimeUnit.Microseconds)]
+    [InlineData(TimeUnit.Nanoseconds)]
+    public void TruncateDatetimeSimple(TimeUnit unit)
+    {
+        var s = InUnit(unit, "2020-01-02 06:00:00");
+
+        s.Dt.TruncateToMonth()[0].AsDateTime().Should().Be(Dt(2020, 1, 1));
+        s.Dt.TruncateToDay()[0].AsDateTime().Should().Be(Dt(2020, 1, 2));
+        s.Dt.Floor(TimeSpan.FromDays(1))[0].AsDateTime().Should().Be(Dt(2020, 1, 2));
+    }
+
+    // test_truncate_datetime_w_expression: the per-row durations "1mo" and "1d" are applied one at a time.
+    [Theory]
+    [InlineData(TimeUnit.Milliseconds)]
+    [InlineData(TimeUnit.Microseconds)]
+    [InlineData(TimeUnit.Nanoseconds)]
+    public void TruncateDatetimeWithExpression(TimeUnit unit)
+    {
+        var a = InUnit(unit, "2020-01-02 06:00:00", "2020-01-03 07:00:00");
+
+        a.Dt.TruncateToMonth()[0].AsDateTime().Should().Be(Dt(2020, 1, 1));
+        a.Dt.TruncateToDay()[1].AsDateTime().Should().Be(Dt(2020, 1, 3));
+    }
+
+    // test_truncate_date, "n vs 1" case. Upstream returns a Date column; Polaire returns DateTime at midnight.
+    [Fact]
+    public void TruncateDate_ByMonth()
+    {
+        var result = Series.FromNullable("a", new DateOnly?[] { new(2020, 1, 1), null, new(2020, 1, 3) }).Dt.TruncateToMonth();
+
+        result.NullCount.Should().Be(1);
+        result[0].AsDateTime().Should().Be(Dt(2020, 1, 1));
+        result[1].IsNull.Should().BeTrue();
+        result[2].AsDateTime().Should().Be(Dt(2020, 1, 1));
+    }
+
+    // test_pre_epoch_truncate_17581
+    [Fact]
+    public void PreEpochTruncate()
+    {
+        var s = Series.FromValues("a", new[] { Dt(1980, 1, 1), Dt(1969, 1, 1, 1) });
+
+        Times(s.Dt.TruncateToDay()).Should().Equal(Dt(1980, 1, 1), Dt(1969, 1, 1));
+        Times(s.Dt.Floor(TimeSpan.FromDays(1))).Should().Equal(Dt(1980, 1, 1), Dt(1969, 1, 1));
+    }
+
+    private const string FloorOriginBug =
+        "Polaire Dt.Floor/Round/Ceiling count intervals from 0001-01-01; Polars counts from the Unix epoch";
+
+    // test_truncate_origin_22590 (time_zone=None), fixed-duration cases. Polars aligns windows to the Unix epoch.
+    [Theory]
+    [InlineData(2, "h", "1970-01-02 03:00", "1970-01-02 02:00")]
+    [InlineData(5, "h", "1983-03-01 04:00", "1983-03-01 02:00", Skip = FloorOriginBug)]
+    [InlineData(3, "d", "1970-01-01 00:00", "1970-01-01 00:00", Skip = FloorOriginBug)]
+    [InlineData(7, "d", "2001-01-04 05:00", "2001-01-04 00:00", Skip = FloorOriginBug)]
+    public void TruncateOrigin(int multiplier, string unit, string value, string expected)
+    {
+        var every = unit == "h" ? TimeSpan.FromHours(multiplier) : TimeSpan.FromDays(multiplier);
+
+        Series.FromValues("a", new[] { Parse(value) }).Dt.Floor(every)[0].AsDateTime().Should().Be(Parse(expected));
+    }
+
+    // ============================================================================
+    // py-polars/tests/unit/operations/namespaces/temporal/test_round.py (py-2.0.0)
+    // Same Round(TimeSpan) adaptation; "1mo", time-zone, per-row and numeric round/round_sig_figs cases are not here.
+    // ============================================================================
+
+    // test_round_by_day_datetime (time_zone=None)
+    [Fact]
+    public void RoundByDayDatetime()
+    {
+        Series.FromValues("a", new[] { Dt(2021, 11, 7, 3) }).Dt.Round(TimeSpan.FromDays(1))[0].AsDateTime().Should().Be(Dt(2021, 11, 7));
+    }
+
+    // test_round_datetime_simple, "1d" part
+    [Theory]
+    [InlineData(TimeUnit.Milliseconds)]
+    [InlineData(TimeUnit.Microseconds)]
+    [InlineData(TimeUnit.Nanoseconds)]
+    public void RoundDatetimeSimple(TimeUnit unit)
+    {
+        InUnit(unit, "2020-01-02 06:00:00").Dt.Round(TimeSpan.FromDays(1))[0].AsDateTime().Should().Be(Dt(2020, 1, 2));
+    }
+
+    // test_round_datetime_w_expression, "1d" row
+    [Theory]
+    [InlineData(TimeUnit.Milliseconds)]
+    [InlineData(TimeUnit.Microseconds)]
+    [InlineData(TimeUnit.Nanoseconds)]
+    public void RoundDatetimeWithExpression(TimeUnit unit)
+    {
+        InUnit(unit, "2020-01-02 06:00:00", "2020-01-20 21:00:00").Dt.Round(TimeSpan.FromDays(1))[1].AsDateTime().Should().Be(Dt(2020, 1, 21));
+    }
+
+    // test_round_negative_towards_epoch_18239 and test_round_positive_away_from_epoch_18239 (time_zone=None).
+    // The ns case is not applicable: .NET ticks are 100 ns, so neither the 1 ns offset nor a 2 ns interval exists.
+    [Theory]
+    [InlineData(TimeUnit.Milliseconds, "ms", -1, 0L)]
+    [InlineData(TimeUnit.Microseconds, "us", -1, 0L)]
+    [InlineData(TimeUnit.Milliseconds, "ms", 1, 2_000_000L)]
+    [InlineData(TimeUnit.Microseconds, "us", 1, 2_000L)]
+    public void RoundTowardsAndAwayFromEpoch(TimeUnit unit, string suffix, int sign, long expectedNs)
+    {
+        var s = InUnit(unit, "1970-01-01 00:00:00").Dt.OffsetBy($"{(sign < 0 ? "-" : "")}1{suffix}");
+        var every = unit == TimeUnit.Milliseconds ? TimeSpan.FromTicks(20_000) : TimeSpan.FromTicks(20);
+
+        s.Dt.Round(every).Dt.EpochNanoseconds()[0].AsInt64().Should().Be(expectedNs);
+    }
 }
