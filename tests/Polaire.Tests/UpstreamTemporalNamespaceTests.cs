@@ -510,4 +510,18 @@ public class UpstreamTemporalNamespaceTests
 
         Times(s.Dt.MonthEnd()).Should().Equal(Dt(2022, 3, 31, 3), Dt(2022, 3, 31, 3, 2, 1).AddMilliseconds(123), Dt(2022, 3, 31), Dt(2022, 3, 31));
     }
+
+    // test_month_end_date. Adaptation: Polaire's MonthEnd returns a DateTime column at 23:59:59.999 of the
+    // last day rather than a Date, so the calendar day is compared.
+    [Theory]
+    [InlineData(2022, 3, 15)]
+    [InlineData(2022, 3, 31)]
+    public void MonthEndDate(int y, int m, int d)
+    {
+        var result = Series.FromValues("dates", new[] { new DateOnly(y, m, d) }).Dt.MonthEnd();
+
+        result.DataType.Should().Be(DataType.DateTime(TimeUnit.Nanoseconds));
+        DateOnly.FromDateTime(result[0].AsDateTime()).Should().Be(new DateOnly(2022, 3, 31));
+        result[0].AsDateTime().Should().Be(Dt(2022, 3, 31, 23, 59, 59).AddMilliseconds(999));
+    }
 }
