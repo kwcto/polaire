@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2527 passing, 0 failing
+- **Tests:** 2626 passing, 0 failing, 3 skipped (upstream expectations Polaire does not meet; see `UpstreamTemporalNamespaceTests`)
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
 - **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
@@ -232,3 +232,4 @@ sum = p2.GetElement(0);
 | 14 | 2293 | Rank/Interpolate expression methods (RowNumber, OrdinalRank, FillForward, etc.) |
 | 15 | 2335 | SQL interface (SqlContext, DataFrame.Sql) |
 | 16 | 2527 | Date/DateTime epoch fix; JSON/NDJSON writers; Strptime/Strftime (chrono formats), OffsetBy; horizontal functions; SliceExpr; Series.Concat/Append/NUnique; VStack/HStack; LazyFrame.Limit |
+| 17 | 2626 | Value-level `Series.Dt` tests (`DtNamespaceValueTests`); ports from upstream `temporal/test_datetime.py` at py-2.0.0 with recorded adaptations (`UpstreamTemporalNamespaceTests`) |

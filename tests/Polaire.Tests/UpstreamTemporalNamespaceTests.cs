@@ -313,4 +313,78 @@ public class UpstreamTemporalNamespaceTests
         Times(dateMin).Should().Equal(Enumerable.Range(1998, 21).Select(y => Dt(y, 11, 1)).ToArray());
         Times(datePlus1Y).Should().Equal(Enumerable.Range(2001, 21).Select(y => Dt(y, 1, 1)).ToArray());
     }
+
+    // test_offset_by_invalid_duration, test_offset_by_invalid_duration_unary_ops and
+    // test_offset_by_missing_or_invalid_unit. Upstream raises InvalidOperationError with messages such as
+    // "expected leading integer in the duration string"; Polaire raises FormatException("Invalid duration ...").
+    [Theory]
+    [InlineData("?")]
+    [InlineData("xx")]
+    [InlineData("P1D")]
+    [InlineData("~10d")]
+    [InlineData("++1d")]
+    [InlineData("+1d+1m+1s")]
+    [InlineData("--1d")]
+    [InlineData("-1d-1m-1s")]
+    [InlineData("1")]
+    [InlineData("1mo23d4")]
+    [InlineData("-2d1")]
+    [InlineData("12時30分45秒")]
+    public void OffsetByInvalidDuration(string offset)
+    {
+        var act = () => Series.FromValues("dates", new[] { Dt(2022, 3, 20, 5, 7) }).Dt.OffsetBy(offset);
+
+        act.Should().Throw<FormatException>().WithMessage("Invalid duration*");
+    }
+
+    // test_offset_by_sortedness uses "+1d" and "+1w" as valid durations: Polars accepts one leading '+'.
+    [Fact(Skip = "Polaire's duration parser rejects a leading '+' sign, which Polars accepts")]
+    public void OffsetBy_LeadingPlusSign()
+    {
+        var s = Series.FromValues("dates", new[] { Dt(2020, 10, 25) });
+
+        Times(s.Dt.OffsetBy("+1d")).Should().Equal(Dt(2020, 10, 26));
+        Times(s.Dt.OffsetBy("+1w")).Should().Equal(Dt(2020, 11, 1));
+    }
+
+    // test_offset_by_saturating_8217_8474: calendar offsets clamp to the end of the target month.
+    [Theory]
+    [InlineData("1mo", 2018, 1, 31, 2018, 2, 28)]
+    [InlineData("1y", 2024, 2, 29, 2025, 2, 28)]
+    [InlineData("1y1mo", 2024, 1, 30, 2025, 2, 28)]
+    public void OffsetBySaturating(string duration, int y, int m, int d, int ey, int em, int ed)
+    {
+        var result = Series.FromValues("dates", new[] { new DateOnly(y, m, d) }).Dt.OffsetBy(duration);
+
+        result.DataType.Should().Be(DataType.Date);
+        result[0].AsDate().Should().Be(new DateOnly(ey, em, ed));
+    }
+
+    // test_strptime_epoch for "s" and "ms" (the "d" unit has no Polaire counterpart). Same fixture adaptation as above.
+    [Fact]
+    public void StrptimeEpoch()
+    {
+        var s = StrptimeFixture();
+
+        Longs(s.Dt.EpochSeconds()).Should().Equal(1_577_836_800L, 1_580_613_610L);
+        Longs(s.Dt.EpochMilliseconds()).Should().Equal(1_577_836_800_000L, 1_580_613_610_987L);
+    }
+
+    // test_cast_time_units. Adaptation: upstream casts between units; here the values are parsed directly
+    // into each unit and the raw storage is compared with the upstream integers.
+    [Theory]
+    [InlineData(TimeUnit.Nanoseconds, 978_307_200_000_000_000L, 981_022_089_000_000_000L)]
+    [InlineData(TimeUnit.Microseconds, 978_307_200_000_000L, 981_022_089_000_000L)]
+    [InlineData(TimeUnit.Milliseconds, 978_307_200_000L, 981_022_089_000L)]
+    public void CastTimeUnits(TimeUnit timeUnit, long first, long second)
+    {
+        var dates = Series.FromValues("dates", new[] { "2001-01-01 00:00:00", "2001-02-01 10:08:09" })
+            .Str.ToDatetime(timeUnit: timeUnit);
+
+        dates.DataType.Should().Be(DataType.DateTime(timeUnit));
+        dates.AsTyped<long>()!.GetValue(0).Should().Be(first);
+        dates.AsTyped<long>()!.GetValue(1).Should().Be(second);
+        dates[0].AsDateTime().Should().Be(Dt(2001, 1, 1));
+        dates[1].AsDateTime().Should().Be(Dt(2001, 2, 1, 10, 8, 9));
+    }
 }
