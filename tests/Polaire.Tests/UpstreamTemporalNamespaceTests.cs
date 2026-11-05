@@ -646,4 +646,73 @@ public class UpstreamTemporalNamespaceTests
 
         s.Dt.Round(every).Dt.EpochNanoseconds()[0].AsInt64().Should().Be(expectedNs);
     }
+
+    // ============================================================================
+    // test_datetime.py: test_mean and test_median, Date and Datetime cases. The Duration and Time cases,
+    // and test_datetime_mean_with_tu / test_datetime_median_with_tu (Duration columns), are not applicable
+    // until those column types exist. Polars returns a Datetime for the mean or median of Date values.
+    // ============================================================================
+
+    private const string TemporalMeanUnsupported =
+        "Polaire Series.Mean() throws NotSupportedException for Date/DateTime; Polars returns a Datetime";
+    private const string TemporalMedianReturnsNull =
+        "Polaire Series.Median() returns null for non-null Date/DateTime values; Polars returns a Datetime";
+
+    private static Series DateValues(string csv) => Series.FromValues("a", csv.Length == 0
+        ? Array.Empty<DateOnly>()
+        : csv.Split(',').Select(v => DateOnly.ParseExact(v, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)).ToArray());
+
+    private static Series DateTimeValues(string csv) => Series.FromValues("a", csv.Split(',').Select(Parse).ToArray());
+
+    // test_mean, "single_date", "spread_even_date", "spread_skewed_date"
+    [Theory(Skip = TemporalMeanUnsupported)]
+    [InlineData("2022-01-01", "2022-01-01 00:00")]
+    [InlineData("2022-01-01,2022-01-02,2022-01-04", "2022-01-02 08:00")]
+    [InlineData("2022-01-01,2022-01-02,2024-05-15", "2022-10-16 16:00")]
+    public void Mean_Date(string values, string expected)
+    {
+        DateValues(values).Mean().AsDateTime().Should().Be(Parse(expected));
+    }
+
+    // test_mean, "single_datetime", "spread_even_datetime", "spread_skewed_datetime"
+    [Theory(Skip = TemporalMeanUnsupported)]
+    [InlineData("2022-01-01 00:00", "2022-01-01 00:00")]
+    [InlineData("2022-01-01 00:00,2022-01-02 00:00,2022-01-03 00:00", "2022-01-02 00:00")]
+    [InlineData("2022-01-01 00:00,2022-01-02 00:00,2024-05-15 00:00", "2022-10-16 16:00")]
+    public void Mean_Datetime(string values, string expected)
+    {
+        DateTimeValues(values).Mean().AsDateTime().Should().Be(Parse(expected));
+    }
+
+    // test_median, "single_date", "spread_even_date", "spread_skewed_date"
+    [Theory(Skip = TemporalMedianReturnsNull)]
+    [InlineData("2022-01-01", "2022-01-01 00:00")]
+    [InlineData("2022-01-01,2022-01-02,2022-01-04", "2022-01-02 00:00")]
+    [InlineData("2022-01-01,2022-01-02,2024-05-15", "2022-01-02 00:00")]
+    public void Median_Date(string values, string expected)
+    {
+        DateValues(values).Median().AsDateTime().Should().Be(Parse(expected));
+    }
+
+    // test_median, "single_datetime", "spread_even_datetime", "spread_skewed_datetime"
+    [Theory(Skip = TemporalMedianReturnsNull)]
+    [InlineData("2022-01-01 00:00", "2022-01-01 00:00")]
+    [InlineData("2022-01-01 00:00,2022-01-02 00:00,2022-01-03 00:00", "2022-01-02 00:00")]
+    [InlineData("2022-01-01 00:00,2022-01-02 00:00,2024-05-15 00:00", "2022-01-02 00:00")]
+    public void Median_Datetime(string values, string expected)
+    {
+        DateTimeValues(values).Median().AsDateTime().Should().Be(Parse(expected));
+    }
+
+    // test_mean and test_median, "empty" and "Nones"
+    [Fact]
+    public void MeanMedian_EmptyAndAllNull_AreNull()
+    {
+        DateValues("").Mean().IsNull.Should().BeTrue();
+        DateValues("").Median().IsNull.Should().BeTrue();
+
+        var nulls = Series.FromNullable("a", new DateOnly?[] { null, null });
+        nulls.Mean().IsNull.Should().BeTrue();
+        nulls.Median().IsNull.Should().BeTrue();
+    }
 }

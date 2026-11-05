@@ -7,7 +7,7 @@ Polaire is a ground-up C#/.NET implementation inspired by [Polars](https://pola.
 ## Current State (October 2026)
 
 - **Build:** Passing
-- **Tests:** 2665 passing, 0 failing, 8 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
+- **Tests:** 2666 passing, 0 failing, 12 skipped (upstream expectations Polaire does not meet; see Known Divergences below)
 - **Target:** .NET 8.0
 - **I/O:** CSV, Parquet, JSON/NDJSON (read and write). Parquet writes Date/DateTime columns as strings.
 - **SQL:** `SqlContext` and `df.Sql("SELECT ... FROM self")`
@@ -145,6 +145,7 @@ Found by porting upstream tests. The skipped cases in `UpstreamTemporalNamespace
 - `Dt.Microsecond()` and `Dt.Nanosecond()` return the .NET component within the millisecond or microsecond; Polars returns the sub-second total.
 - `Dt.MonthStart()` and `Dt.MonthEnd()` drop the time of day, and `MonthEnd` returns 23:59:59.999; Polars keeps the time of day.
 - Duration strings with a leading `+` are rejected; Polars accepts one.
+- `Series.Mean()` throws `NotSupportedException` for Date and DateTime columns, and `Series.Median()` silently returns null for them; Polars returns a Datetime for both.
 - `Dt.DayOfWeek()` uses .NET numbering (Sunday = 0); Polars `weekday()` uses Monday = 1 to Sunday = 7.
 
 ## Critical Bug Fixes
@@ -242,4 +243,4 @@ sum = p2.GetElement(0);
 | 14 | 2293 | Rank/Interpolate expression methods (RowNumber, OrdinalRank, FillForward, etc.) |
 | 15 | 2335 | SQL interface (SqlContext, DataFrame.Sql) |
 | 16 | 2527 | Date/DateTime epoch fix; JSON/NDJSON writers; Strptime/Strftime (chrono formats), OffsetBy; horizontal functions; SliceExpr; Series.Concat/Append/NUnique; VStack/HStack; LazyFrame.Limit |
-| 17 | 2665 | Value-level `Series.Dt` tests (`DtNamespaceValueTests`); ports from upstream `temporal/` tests (test_datetime, test_offset_by, test_month_start_end, test_truncate, test_round) at py-2.0.0 with recorded adaptations (`UpstreamTemporalNamespaceTests`) |
+| 17 | 2666 | Value-level `Series.Dt` tests (`DtNamespaceValueTests`); ports from upstream `temporal/` tests (test_datetime, test_offset_by, test_month_start_end, test_truncate, test_round) at py-2.0.0 with recorded adaptations (`UpstreamTemporalNamespaceTests`) |
