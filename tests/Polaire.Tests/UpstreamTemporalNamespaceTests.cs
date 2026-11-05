@@ -387,4 +387,127 @@ public class UpstreamTemporalNamespaceTests
         dates[0].AsDateTime().Should().Be(Dt(2001, 1, 1));
         dates[1].AsDateTime().Should().Be(Dt(2001, 2, 1, 10, 8, 9));
     }
+
+    // ============================================================================
+    // py-polars/tests/unit/operations/namespaces/temporal/test_offset_by.py (py-2.0.0)
+    // ============================================================================
+
+    private static DateOnly[] Dates(Series s) => Enumerable.Range(0, s.Length).Select(i => s[i].AsDate()).ToArray();
+
+    private static DateTime Parse(string text) => DateTime.SpecifyKind(
+        DateTime.ParseExact(text, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture), DateTimeKind.Utc);
+
+    // test_date_offset_by. The upstream "+2d24h" case is omitted: Polaire's parser rejects a leading '+'
+    // (see OffsetBy_LeadingPlusSign).
+    [Theory]
+    [InlineData("1d", "2020-01-02", "2020-01-03")]
+    [InlineData("-1d", "2019-12-31", "2020-01-01")]
+    [InlineData("3d", "2020-01-04", "2020-01-05")]
+    [InlineData("72h", "2020-01-04", "2020-01-05")]
+    [InlineData("-2mo", "2019-11-01", "2019-11-02")]
+    public void DateOffsetBy(string offset, string first, string second)
+    {
+        var result = Series.FromValues("dates", new[] { new DateOnly(2020, 1, 1), new DateOnly(2020, 1, 2) }).Dt.OffsetBy(offset);
+
+        result.DataType.Should().Be(DataType.Date);
+        Dates(result).Should().Equal(DateOnly.Parse(first, System.Globalization.CultureInfo.InvariantCulture),
+            DateOnly.Parse(second, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    // test_datetime_offset_by (time_zone=None) for the ms, us and ns time units.
+    [Theory]
+    [InlineData("1d", "2020-01-02 00:00", "2020-01-03 00:00")]
+    [InlineData("-1d", "2019-12-31 00:00", "2020-01-01 00:00")]
+    [InlineData("3d", "2020-01-04 00:00", "2020-01-05 00:00")]
+    [InlineData("72h", "2020-01-04 00:00", "2020-01-05 00:00")]
+    [InlineData("2d24h", "2020-01-04 00:00", "2020-01-05 00:00")]
+    [InlineData("7m", "2020-01-01 00:07", "2020-01-02 00:07")]
+    [InlineData("-3m", "2019-12-31 23:57", "2020-01-01 23:57")]
+    [InlineData("2mo", "2020-03-01 00:00", "2020-03-02 00:00")]
+    public void DatetimeOffsetBy(string offset, string first, string second)
+    {
+        foreach (var unit in new[] { TimeUnit.Milliseconds, TimeUnit.Microseconds, TimeUnit.Nanoseconds })
+        {
+            var input = Series.FromValues("dates", new[] { "2020-01-01 00:00:00", "2020-01-02 00:00:00" }).Str.ToDatetime(timeUnit: unit);
+            var result = input.Dt.OffsetBy(offset);
+
+            result.DataType.Should().Be(DataType.DateTime(unit), $"unit {unit}");
+            Times(result).Should().Equal(Parse(first), Parse(second));
+        }
+    }
+
+    // test_offset_by_broadcasting (test_datetime.py), Series-level. Polaire's OffsetBy takes one duration
+    // string, so the per-row offset column is applied one offset at a time; the null offset and the
+    // time-zone column (d3) have no counterpart.
+    [Fact]
+    public void OffsetByBroadcasting_Lhs()
+    {
+        var offsets = new[] { "1d", "10d", "3d" };
+        var expected = new[] { Dt(2020, 10, 26), Dt(2020, 11, 4), Dt(2020, 10, 28) };
+
+        var lit = Series.FromValues("d1", new[] { Dt(2020, 10, 25) });
+        offsets.Select(o => lit.Dt.OffsetBy(o)[0].AsDateTime()).Should().Equal(expected);
+
+        var litDate = Series.FromValues("d4", new[] { new DateOnly(2020, 10, 25) });
+        offsets.Select(o => litDate.Dt.OffsetBy(o)[0].AsDate()).Should().Equal(expected.Select(DateOnly.FromDateTime));
+    }
+
+    [Fact]
+    public void OffsetByBroadcasting_Rhs()
+    {
+        var dt = Series.FromNullable("dt", new DateTime?[] { Dt(2020, 10, 25), Dt(2021, 1, 2), null });
+
+        var d1 = dt.Dt.OffsetBy("1mo3d");
+        d1[0].AsDateTime().Should().Be(Dt(2020, 11, 28));
+        d1[1].AsDateTime().Should().Be(Dt(2021, 2, 5));
+        d1[2].IsNull.Should().BeTrue();
+
+        var d2 = dt.Dt.OffsetBy("1y1mo");
+        d2[0].AsDateTime().Should().Be(Dt(2021, 11, 25));
+        d2[1].AsDateTime().Should().Be(Dt(2022, 2, 2));
+        d2[2].IsNull.Should().BeTrue();
+
+        var d4 = Series.FromNullable("dt", new DateOnly?[] { new(2020, 10, 25), new(2021, 1, 2), null }).Dt.OffsetBy("1y1mo1d");
+        d4.DataType.Should().Be(DataType.Date);
+        d4[0].AsDate().Should().Be(new DateOnly(2021, 11, 26));
+        d4[1].AsDate().Should().Be(new DateOnly(2022, 2, 3));
+        d4[2].IsNull.Should().BeTrue();
+
+        // "test all literal"
+        Series.FromValues("d", new[] { Dt(2021, 11, 26) }).Dt.OffsetBy("1mo1d")[0].AsDateTime().Should().Be(Dt(2021, 12, 27));
+    }
+
+    // ============================================================================
+    // py-polars/tests/unit/operations/namespaces/temporal/test_month_start_end.py (py-2.0.0)
+    // ============================================================================
+
+    // test_month_start_date. Adaptation: Polaire's MonthStart returns a DateTime column (midnight), not Date.
+    [Theory]
+    [InlineData(2022, 3, 15)]
+    [InlineData(2022, 3, 31)]
+    public void MonthStartDate(int y, int m, int d)
+    {
+        var result = Series.FromValues("dates", new[] { new DateOnly(y, m, d) }).Dt.MonthStart();
+
+        result[0].AsDateTime().Should().Be(Dt(2022, 3, 1));
+    }
+
+    // test_month_start_datetime (time_zone=None): upstream keeps the time of day; Polaire's MonthStart
+    // returns midnight of the first day. The upstream expectation is kept here.
+    [Fact(Skip = "Polaire Dt.MonthStart() drops the time of day; Polars month_start keeps it")]
+    public void MonthStartDatetime_KeepsTimeOfDay()
+    {
+        var s = Series.FromValues("dates", new[] { Dt(2022, 3, 15, 3), Dt(2022, 3, 15, 3, 2, 1).AddMilliseconds(123), Dt(2022, 3, 15), Dt(2022, 3, 1) });
+
+        Times(s.Dt.MonthStart()).Should().Equal(Dt(2022, 3, 1, 3), Dt(2022, 3, 1, 3, 2, 1).AddMilliseconds(123), Dt(2022, 3, 1), Dt(2022, 3, 1));
+    }
+
+    // test_month_end_datetime (time_zone=None): same divergence; Polaire's MonthEnd returns 23:59:59.999.
+    [Fact(Skip = "Polaire Dt.MonthEnd() returns 23:59:59.999 of the last day; Polars month_end keeps the time of day")]
+    public void MonthEndDatetime_KeepsTimeOfDay()
+    {
+        var s = Series.FromValues("dates", new[] { Dt(2022, 3, 15, 3), Dt(2022, 3, 15, 3, 2, 1).AddMilliseconds(123), Dt(2022, 3, 15), Dt(2022, 3, 31) });
+
+        Times(s.Dt.MonthEnd()).Should().Equal(Dt(2022, 3, 31, 3), Dt(2022, 3, 31, 3, 2, 1).AddMilliseconds(123), Dt(2022, 3, 31), Dt(2022, 3, 31));
+    }
 }
